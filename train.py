@@ -45,7 +45,10 @@ def train(epoch):
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
 
         last_layer = list(net.children())[-1]
+        # import pdb
+        # pdb.set_trace()
         for name, para in last_layer.named_parameters():
+            # if para.grad is not None:
             if 'weight' in name:
                 writer.add_scalar('LastLayerGradients/grad_norm2_weights', para.grad.norm(), n_iter)
             if 'bias' in name:

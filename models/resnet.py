@@ -10,6 +10,7 @@
 
 import torch
 import torch.nn as nn
+from . import csam
 
 class BasicBlock(nn.Module):
     """Basic Block for resnet 18 and resnet 34
@@ -79,7 +80,7 @@ class BottleNeck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, num_block, num_classes=100):
+    def __init__(self, block, num_block, num_classes=100, use_csam = True):
         super().__init__()
 
         self.in_channels = 64
@@ -95,6 +96,17 @@ class ResNet(nn.Module):
         self.conv4_x = self._make_layer(block, 256, num_block[2], 2)
         self.conv5_x = self._make_layer(block, 512, num_block[3], 2)
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        self.use_csam = use_csam
+        self.csam = csam.ConvolutionalSelfAttention(
+            spatial_shape=[4, 4, 512],
+            filter_size=3,
+            approach_args={
+                'name': '1',
+                'pos_emb_dim': 2,
+                'softmax_temp': 1
+            },
+            )
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
     def _make_layer(self, block, out_channels, num_blocks, stride):
@@ -128,6 +140,9 @@ class ResNet(nn.Module):
         output = self.conv3_x(output)
         output = self.conv4_x(output)
         output = self.conv5_x(output)
+        if self.use_csam:
+            output = self.csam(output.permute(0, 2, 3, 1))
+            output = output.permute(0, 3, 1, 2)
         output = self.avg_pool(output)
         output = output.view(output.size(0), -1)
         output = self.fc(output)
