@@ -41,6 +41,7 @@ def train(epoch):
         loss = loss_function(outputs, labels)
         loss.backward()
         optimizer.step()
+        # import pdb; pdb.set_trace()
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
 
@@ -71,7 +72,10 @@ def train(epoch):
     for name, param in net.named_parameters():
         layer, attr = os.path.splitext(name)
         attr = attr[1:]
-        writer.add_histogram("{}/{}".format(layer, attr), param, epoch)
+        try:
+            writer.add_histogram("{}/{}".format(layer, attr), param, epoch)
+        except:
+            import pdb; pdb.set_trace()
 
     finish = time.time()
 
@@ -128,6 +132,10 @@ if __name__ == '__main__':
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
+    parser.add_argument('-variant_name', type=str, required=True, help='approach variant')
+    parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
+    parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
+    parser.add_argument('-softmax_temp', type=int, default=1, help='cosine similarity softmax temp')
     args = parser.parse_args()
 
     net = get_network(args)
@@ -154,17 +162,20 @@ if __name__ == '__main__':
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
-
+    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}'.format(
+        args.variant_name, args.position_encoding_dim, args.variant_loc, args.softmax_temp
+        )
     if args.resume:
-        recent_folder = most_recent_folder(os.path.join(settings.CHECKPOINT_PATH, args.net), fmt=settings.DATE_FORMAT)
+        recent_folder = most_recent_folder(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name), fmt=settings.DATE_FORMAT)
         if not recent_folder:
             raise Exception('no recent folder were found')
 
-        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder)
+        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder)
 
     else:
-        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, settings.TIME_NOW)
+        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, settings.TIME_NOW)
 
+    print('Saving to: {}'.format(checkpoint_path))
     #use tensorboard
     if not os.path.exists(settings.LOG_DIR):
         os.mkdir(settings.LOG_DIR)
@@ -172,7 +183,7 @@ if __name__ == '__main__':
     #since tensorboard can't overwrite old values
     #so the only way is to create a new tensorboard log
     writer = SummaryWriter(log_dir=os.path.join(
-            settings.LOG_DIR, args.net, settings.TIME_NOW))
+            settings.LOG_DIR, args.net, model_name, settings.TIME_NOW))
     input_tensor = torch.Tensor(1, 3, 32, 32)
     if args.gpu:
         input_tensor = input_tensor.cuda()
@@ -181,6 +192,7 @@ if __name__ == '__main__':
     #create checkpoint folder to save model
     if not os.path.exists(checkpoint_path):
         os.makedirs(checkpoint_path)
+        print(checkpoint_path)
     checkpoint_path = os.path.join(checkpoint_path, '{net}-{epoch}-{type}.pth')
 
     best_acc = 0.0
