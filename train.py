@@ -136,6 +136,7 @@ if __name__ == '__main__':
     parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
     parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
     parser.add_argument('-softmax_temp', type=int, default=1, help='cosine similarity softmax temp')
+    parser.add_argument('-naming_suffix', type=str, default='', help='Add suffix to model name')
     args = parser.parse_args()
 
     net = get_network(args)
@@ -165,6 +166,8 @@ if __name__ == '__main__':
     model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}'.format(
         args.variant_name, args.position_encoding_dim, args.variant_loc, args.softmax_temp
         )
+    if args.naming_suffix != '':
+        model_name += '_{}'.format(args.naming_suffix)
     if args.resume:
         recent_folder = most_recent_folder(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name), fmt=settings.DATE_FORMAT)
         if not recent_folder:
