@@ -1,5 +1,6 @@
 from __future__ import print_function
 import argparse
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,6 +18,7 @@ class ConvolutionalSelfAttention(nn.Module):
     def __init__(self, spatial_shape, filter_size, approach_args={'name': '4', 'padding': 'valid', 'stride': 1}):
         super(ConvolutionalSelfAttention, self).__init__()
         self.spatial_H, self.spatial_W, self.spatial_C = spatial_shape
+        self.stochastic_stride = approach_args['stochastic_stride']
         self.stride = approach_args.get('stride', 1)
         self.filter_K = filter_size
         self.filter_size = self.filter_K * self.filter_K
@@ -81,21 +83,46 @@ class ConvolutionalSelfAttention(nn.Module):
         self.local_mask = self.local_mask.cuda()
         self.local_indices = self.local_indices()
 
+    def compute_cell_lengths(self, num_cells, total_length):
+        cell_lengths = self.stride * torch.ones(num_cells, dtype=torch.int)
+
+        # convs_height and convs_width are not necessarily divisible by stride
+        if self.stochastic_stride:
+            leftover_length = total_length - self.stride * num_cells
+            for _ in range(leftover_length):
+                i = random.randrange(len(cell_lengths))
+                cell_lengths[i] += 1
+
+        return cell_lengths
+
     def compute_input_mask(self):
         convs_height = self.spatial_H - self.filter_K + 1
         convs_width = self.spatial_W - self.filter_K + 1
         num_convs = convs_height * convs_width
-        input_mask = torch.zeros((num_convs, self.spatial_H, self.spatial_W), dtype=torch.float32)
-        self.local_indices = torch.zeros((num_convs, self.filter_K * self.filter_K))
+
+        strided_convs_height = convs_height // self.stride
+        strided_convs_width = convs_width // self.stride
+        num_strided_convs = strided_convs_height * strided_convs_width
+
+        cell_heights = self.compute_cell_lengths(strided_convs_height, convs_height)
+        cell_widths = self.compute_cell_lengths(strided_convs_width, convs_width)
+
+        cell_row_starts = torch.cumsum(torch.cat((torch.zeros(1, dtype=torch.int), cell_heights[:-1])), dim=0)
+        cell_col_starts = torch.cumsum(torch.cat((torch.zeros(1, dtype=torch.int), cell_widths[:-1])), dim=0)
+
+        input_mask = torch.zeros((num_strided_convs, self.spatial_H, self.spatial_W), dtype=torch.float32)
+        self.local_indices = torch.zeros((num_strided_convs, self.filter_K * self.filter_K))
         conv_idx = 0
-        for i in range(convs_height):
-            for j in range(convs_width):
-                input_mask[conv_idx, i:i+self.filter_K, j:j+self.filter_K] = 1.
+        for i_idx, i in enumerate(cell_row_starts):
+            for j_idx, j in enumerate(cell_col_starts):
+                offset_i = i + (random.randrange(cell_heights[i_idx]) if self.stochastic_stride else 0)
+                offset_j = j + (random.randrange(cell_widths[j_idx]) if self.stochastic_stride else 0)
+                input_mask[conv_idx, offset_i:offset_i+self.filter_K, offset_j:offset_j+self.filter_K] = 1.
                 self.local_indices[conv_idx] = input_mask[conv_idx].reshape(-1).nonzero().sort()[0].reshape(-1)
                 conv_idx += 1
-        self.num_convs = convs_height * convs_width
-        self.convs_height = convs_height
-        self.convs_width = convs_width
+        self.num_convs = strided_convs_height * strided_convs_width
+        self.convs_height = strided_convs_height
+        self.convs_width = strided_convs_width
         return input_mask.flatten(1) # [Nc, HW]
 
     def split_input(self, batch, mask_X_g=True):
@@ -142,14 +169,14 @@ class ConvolutionalSelfAttention(nn.Module):
             y_permuted = y_normed.transpose(3, 2)
             res = torch.einsum('ijkl,ijla->ijka', x_normed, y_permuted)
         return res
-    
+
     def efficient_approach1(self, batch):
         batch = self.maybe_add_positional_encodings(batch)
         batch_flat = batch.flatten(1,2)                                                             # [B,H,W,C] -> [B,HW,C]
         gX = self.global_transform(batch_flat)                                                      # [B,HW,C] -> [B,HW,K^2]
         global_mask = 1 - self.local_mask                                                           # [Nc,HW]
         convolutions = torch.einsum(
-            'ijk,kl->ijl', 
+            'ijk,kl->ijl',
             gX.transpose(2, 1),                                                                     # [B,HW,K^2] -> [B,K^2,HW]
             global_mask.transpose(1,0)                                                              # [Nc,HW] -> [HW,Nc]
             ).transpose(2,1)                                                                        # [B,K^2,HW]x[HW,Nc] -> [B,K^2,Nc] -> [B,Nc,K^2]
@@ -220,7 +247,7 @@ class ConvolutionalSelfAttention(nn.Module):
             keys, queries                                                                           # [1,B,HW,E], [F,B,K^2,E]
         )                                                                                           # [F,B,HW,K^2]
         compatabilities = F.softmax(
-            self.appraoch_args['softmax_temp'] * raw_compatibilities, 
+            self.appraoch_args['softmax_temp'] * raw_compatibilities,
             dim=2
         )
         elem_mul = values * compatabilities                                                         # [1,B,HW,1] x [F,B,HW,K^2] -> [F,B,HW,K^2]

@@ -127,7 +127,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-net', type=str, required=True, help='net type')
-    parser.add_argument('-gpu', action='store_true', default=False, help='use gpu or not')
+    parser.add_argument('-gpu', action='store_true', default=True, help='use gpu or not')
     parser.add_argument('-b', type=int, default=128, help='batch size for dataloader')
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
@@ -136,6 +136,8 @@ if __name__ == '__main__':
     parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
     parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
     parser.add_argument('-softmax_temp', type=int, default=1, help='cosine similarity softmax temp')
+    parser.add_argument('-stochastic_stride', action='store_true', default=False, help='offset strided filters stochastically to allow overlap')
+    parser.add_argument('-stride', type=int, default=1, help='stride value for the convolutions')
     parser.add_argument('-naming_suffix', type=str, default='', help='Add suffix to model name')
     args = parser.parse_args()
 
@@ -163,8 +165,8 @@ if __name__ == '__main__':
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
-    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}'.format(
-        args.variant_name, args.position_encoding_dim, args.variant_loc, args.softmax_temp
+    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}'.format(
+        args.variant_name, args.position_encoding_dim, args.variant_loc, args.softmax_temp, args.stochastic_stride, args.stride
         )
     if args.naming_suffix != '':
         model_name += '_{}'.format(args.naming_suffix)

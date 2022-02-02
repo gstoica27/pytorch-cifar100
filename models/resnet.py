@@ -82,7 +82,7 @@ class CheckLinear(nn.Module):
     def __init__(self, in_dim, out_dim):
         super().__init__()
         self.linear = nn.Linear(in_dim, out_dim)
-    
+
     def forward(self, batch):
         batch = batch.permute(0, 2, 3, 1)
         output = self.linear(batch)
@@ -91,8 +91,9 @@ class CheckLinear(nn.Module):
 class ResNet(nn.Module):
 
     def __init__(
-        self, block, num_block, num_classes=100, variant_name='1', 
-        pos_emb_dim=0, softmax_temp=1, variant_loc=-1
+        self, block, num_block, num_classes=100, variant_name='1',
+        pos_emb_dim=0, softmax_temp=1, variant_loc=-1, stochastic_stride=False,
+        stride=1
     ):
         super().__init__()
 
@@ -109,7 +110,7 @@ class ResNet(nn.Module):
         self.conv4_x = self._make_layer(block, 256, num_block[2], 2) # 16 -> 8
         self.conv5_x = self._make_layer(block, 512, num_block[3], 2) # 8 -> 4
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        
+
         self.tensor_dimension = [
             [], [32, 64], [32, 64], [16, 128], [8, 256], [4, 512]
         ]
@@ -143,7 +144,9 @@ class ResNet(nn.Module):
                 approach_args={
                     'name': variant_name,
                     'pos_emb_dim': pos_emb_dim,
-                    'softmax_temp': softmax_temp
+                    'softmax_temp': softmax_temp,
+                    'stochastic_stride': stochastic_stride,
+                    'stride': stride
                 },
                 )
             self.csam_bn = nn.BatchNorm2d(n_channels)
@@ -187,13 +190,13 @@ class ResNet(nn.Module):
         # output = self.conv4_x(output)
 
         # output = self.conv5_x(output)
-        
+
         # if self.use_csam:
         #     # import pdb;pdb.set_trace()
         #     output = self.csam(output.permute(0, 2, 3, 1))
         #     output = output.permute(0, 3, 1, 2)
         #     output = self.csam_bn(output)
-        
+
         # output = self.avg_pool(output)
         # output = output.view(output.size(0), -1)
         # output = self.fc(output)
@@ -204,12 +207,13 @@ class ResNet(nn.Module):
 
         return output
 
-def resnet18(variant_name='1', pos_emb_dim=0, softmax_temp=1, variant_loc=-1):
+def resnet18(variant_name='1', pos_emb_dim=0, softmax_temp=1, variant_loc=-1, stochastic_stride=False, stride=1):
     """ return a ResNet 18 object
     """
-    return ResNet(BasicBlock, [2, 2, 2, 2], 
-    variant_name=variant_name, pos_emb_dim=pos_emb_dim, 
-    softmax_temp=softmax_temp, variant_loc=variant_loc
+    return ResNet(BasicBlock, [2, 2, 2, 2],
+    variant_name=variant_name, pos_emb_dim=pos_emb_dim,
+    softmax_temp=softmax_temp, variant_loc=variant_loc,
+    stochastic_stride=stochastic_stride, stride=stride
     )
 
 def resnet34():
@@ -231,6 +235,3 @@ def resnet152():
     """ return a ResNet 152 object
     """
     return ResNet(BottleNeck, [3, 8, 36, 3])
-
-
-
