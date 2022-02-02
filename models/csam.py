@@ -14,13 +14,16 @@ Modified from: https://github.com/pytorch/examples/blob/master/mnist/main.py
 """
 
 class ConvolutionalSelfAttention(nn.Module):
-    def __init__(self, spatial_shape, filter_size, approach_args={'name': '4'}):
+    def __init__(self, spatial_shape, filter_size, approach_args={'name': '4', 'padding': 'valid', 'stride': 1}):
         super(ConvolutionalSelfAttention, self).__init__()
         self.spatial_H, self.spatial_W, self.spatial_C = spatial_shape
+        self.stride = approach_args.get('stride', 1)
         self.filter_K = filter_size
         self.filter_size = self.filter_K * self.filter_K
         self.approach_name = approach_args['name']
         self.appraoch_args = approach_args
+
+        self.input_padder = self.compute_padding(approach_args.get('padding', 'valid'))
 
         self.setup_approach()
         self.name2approach = {
@@ -36,6 +39,18 @@ class ConvolutionalSelfAttention(nn.Module):
         if torch.cuda.is_available():
             self.local_mask = self.local_mask.cuda()
             self.local_indices = self.local_indices.cuda()
+
+    def compute_padding(self, padding_type):
+        if padding_type.lower() == 'valid':
+            padding_tuple = (0, 0, 0, 0)
+        elif padding_type.lower() == 'same':
+            padding_x = (self.stride * (self.spatial_W - 1) - self.stride - self.spatial_W + self.filter_K) / 2
+            padding_y = (self.stride * (self.spatial_H - 1) - self.stride - self.spatial_H + self.filter_K) / 2
+            padding_tuple = (padding_x, padding_x, padding_y, padding_y)
+        else:
+            raise ValueError('Unknown padding type requested')
+        input_padder = nn.ConstantPad2d(padding_tuple, 0.)
+        return input_padder
 
     def setup_approach(self):
         self.X_encoding_dim = self.spatial_C                                                        # Call this E
@@ -217,12 +232,14 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                           # [B,F,C] -> [B,F_H,F_W,C]
         return output
 
-    def forward(self, batch, permute_input=True):
-        if permute_input:
-            batch = batch.permute(0, 2, 3, 1)
-        output = self.name2approach[self.approach_name](batch)
-        if permute_input:
-            output = output.permute(0, 3, 1, 2)
+    def forward(self, batch):
+        """
+        Input shape expected to be [B,C,H,W]
+        """
+        batch = self.input_padder(batch)                                                            # Pad batch for resolution reduction/preservation
+        batch = batch.permute(0, 2, 3, 1)                                                           # [B,C,H,W] -> [B,H,W,C]
+        output = self.name2approach[self.approach_name](batch)                                      # [B,C,F,F] -> [B,F,F,C]
+        output = output.permute(0, 3, 1, 2)                                                         # [B,F,F,C] -> [B,C,F,F]
         return output
 
 class Net(nn.Module):
