@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from conf import settings
 from utils import get_network, get_test_dataloader
+import numpy as np
 
 if __name__ == '__main__':
 
@@ -31,10 +32,14 @@ if __name__ == '__main__':
     parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
     parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
     parser.add_argument('-softmax_temp', type=int, default=1, help='cosine similarity softmax temp')
+    parser.add_argument('-stochastic_stride', action='store_true', default=False, help='offset strided filters stochastically to allow overlap')
+    parser.add_argument('-stride', type=int, default=1, help='stride value for the convolutions')
     args = parser.parse_args()
     
     net = get_network(args)
-
+    
+    misclassifications = []
+    
     cifar100_test_loader = get_test_dataloader(
         settings.CIFAR100_TRAIN_MEAN,
         settings.CIFAR100_TRAIN_STD,
@@ -53,7 +58,7 @@ if __name__ == '__main__':
     correct_1 = 0.0
     correct_5 = 0.0
     total = 0
-
+    images_seen = 0
     with torch.no_grad():
         for n_iter, (image, label) in tqdm(enumerate(cifar100_test_loader)):
             print("iteration: {}\ttotal {} iterations".format(n_iter + 1, len(cifar100_test_loader)))
@@ -76,6 +81,13 @@ if __name__ == '__main__':
 
             #compute top1
             correct_1 += correct[:, :1].sum()
+            
+            for idx, is_correct in enumerate(correct[:, 0]):
+                if not is_correct:
+                    misclassifications.append(images_seen)
+                images_seen += 1
+
+
 
     if args.gpu:
         print('GPU INFO.....')
@@ -85,3 +97,5 @@ if __name__ == '__main__':
     print("Top 1 err: ", 1 - correct_1 / len(cifar100_test_loader.dataset))
     print("Top 5 err: ", 1 - correct_5 / len(cifar100_test_loader.dataset))
     print("Parameter numbers: {}".format(sum(p.numel() for p in net.parameters())))
+    np.savetxt('./baseline_wrong.txt', misclassifications)
+

@@ -194,7 +194,7 @@ def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=Tru
 
     return cifar100_training_loader
 
-def get_test_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=True):
+def get_test_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=False):
     """ return training dataloader
     Args:
         mean: mean of cifar100 test dataset
