@@ -50,7 +50,7 @@ if __name__ == '__main__':
     weights = torch.load(args.weights)
     net_params = {i[0]:i[1] for i in net.named_parameters()}
     # valid_weights = {k:v for k,v in weights.items() if k in named_parameters}
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
     net.load_state_dict(weights)
     print(net)
     net.eval()
