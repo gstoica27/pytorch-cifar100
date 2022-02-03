@@ -22,7 +22,7 @@ class ConvolutionalSelfAttention(nn.Module):
     ):
         super(ConvolutionalSelfAttention, self).__init__()
         self.spatial_H, self.spatial_W, self.spatial_C = spatial_shape
-        self.apply_stochastic_stride = approach_args['apply_stochastic_stride']
+        self.apply_stochastic_stride = approach_args.get('apply_stochastic_stride', False)
         self.stride = approach_args.get('stride', 1)
         self.filter_K = filter_size
         self.filter_size = self.filter_K * self.filter_K
@@ -47,7 +47,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.local_indices = self.local_indices.cuda()
 
     def compute_padding(self, padding_type):
-        pdb.set_trace()
+        # pdb.set_trace()
         if padding_type.lower() == 'valid':
             padding_tuple = (0, 0, 0, 0)
         elif padding_type.lower() == 'same':
