@@ -88,52 +88,10 @@ class CheckLinear(nn.Module):
         output = self.linear(batch)
         return output.permute(0, 3, 1, 2)
 
-class ConvAttnWrapper(nn.Module):
-    def __init__(self, backbone_call, backbone_kwargs, variant_kwargs):
-        super().__init__()
-
-        self.backbone_kwargs = backbone_kwargs
-        self.variant_kwargs = variant_kwargs
-        # instantiate the backbone
-        self.backbone = backbone_call(**backbone_kwargs)
-        # Obtain ordered list of backbone layers | Layer spatial information
-        self.backbone_layers, self.backbone_spatial_shapes = self.backbone.get_network_structure()
-        
-        self.network_structure = self.inject_variant()
-
-    def inject_variant(self):
-        injection_instructions = self.variant_kwargs['injection_info']
-        network_structure = []
-        start_point = 0
-        for injection_instruction in injection_instructions:
-            inject_layer, inject_number, filter_size = injection_instruction
-            # Add backbone layers up to injection point
-            network_structure += self.backbone_layers[start_point: inject_layer]
-            spatial_shape = self.backbone_spatial_shapes[inject_layer]
-            # Stack network modules
-            for i in range(inject_number):                
-                variant_module = csam.ConvolutionalSelfAttention(
-                    spatial_shape=spatial_shape,
-                    filter_size=filter_size,
-                    approach_args=self.variant_kwargs
-                )
-                variant_bn = nn.BatchNorm2d(spatial_shape[-1])
-                network_structure += [variant_module, variant_bn]
-                spatial_shape = variant_module.get_output_shape()
-
-            start_point = inject_layer
-        network_structure += self.backbone_layers[start_point:]
-        network_structure = nn.ModuleList(network_structure)
-        return network_structure
-    
-    def forward(self, batch):
-        return self.network_structure(batch)
-
-
 class ResNet(nn.Module):
 
     def __init__(
-        self, block, num_block, num_classes=100, 
+        self, block, num_block, num_classes=100,
         # variant_name='1', pos_emb_dim=0, softmax_temp=1, variant_locs=[], stochastic_stride=False, stride=1
     ):
         super().__init__()
@@ -243,7 +201,7 @@ class ResNet(nn.Module):
     #     network_layers = []
     #     for injection_loc in self.variant_locs:
     #         spatial_dim, n_channels = self.tensor_dimension[injection_loc]
-            
+
 
     def _make_layer(self, block, out_channels, num_blocks, stride):
         """make resnet layers(by layer i didnt mean this 'layer' was the
@@ -301,11 +259,11 @@ class ResNet(nn.Module):
         return output
 
 def resnet18(
-    # variant_name='1', 
-    # pos_emb_dim=0, 
-    # softmax_temp=1, 
-    # variant_loc=-1, 
-    # stochastic_stride=False, 
+    # variant_name='1',
+    # pos_emb_dim=0,
+    # softmax_temp=1,
+    # variant_loc=-1,
+    # stochastic_stride=False,
     # stride=1
     ):
     """ return a ResNet 18 object

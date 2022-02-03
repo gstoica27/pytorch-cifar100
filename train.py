@@ -45,13 +45,10 @@ def train(epoch):
         loss = loss_function(outputs, labels)
         loss.backward()
         optimizer.step()
-        # import pdb; pdb.set_trace()
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
 
         last_layer = list(model.children())[-1]
-        # import pdb
-        # pdb.set_trace()
         for name, para in last_layer.named_parameters():
             # if para.grad is not None:
             if 'weight' in name:
@@ -143,9 +140,9 @@ if __name__ == '__main__':
     # parser.add_argument('-stochastic_stride', action='store_true', default=False, help='offset strided filters stochastically to allow overlap')
     # parser.add_argument('-stride', type=int, default=1, help='stride value for the convolutions')
     parser.add_argument(
-        '-variant_config_path', 
-        type=str, 
-        default='configs/convattn.yaml', 
+        '-variant_config_path',
+        type=str,
+        default='configs/convattn.yaml',
         help='path to variant configuration'
     )
     parser.add_argument('-naming_suffix', type=str, default='', help='Add suffix to model name')
@@ -174,7 +171,6 @@ if __name__ == '__main__':
     )
 
     loss_function = nn.CrossEntropyLoss()
-    pdb.set_trace()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
