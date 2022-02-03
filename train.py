@@ -6,6 +6,9 @@
 author baiyu
 """
 
+import pdb
+from ast import parse
+from email.policy import default
 import os
 import sys
 import argparse
@@ -21,15 +24,16 @@ import torchvision.transforms as transforms
 
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
+from models.csam import ConvAttnWrapper
 from conf import settings
 from utils import get_network, get_training_dataloader, get_test_dataloader, WarmUpLR, \
-    most_recent_folder, most_recent_weights, last_epoch, best_acc_weights
+    most_recent_folder, most_recent_weights, last_epoch, best_acc_weights, read_yaml, \
+    save_yaml, name_model
 
 def train(epoch):
 
     start = time.time()
-    net.train()
+    model.train()
     for batch_index, (images, labels) in enumerate(cifar100_training_loader):
 
         if args.gpu:
@@ -37,7 +41,7 @@ def train(epoch):
             images = images.cuda()
 
         optimizer.zero_grad()
-        outputs = net(images)
+        outputs = model(images)
         loss = loss_function(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -45,7 +49,7 @@ def train(epoch):
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
 
-        last_layer = list(net.children())[-1]
+        last_layer = list(model.children())[-1]
         # import pdb
         # pdb.set_trace()
         for name, para in last_layer.named_parameters():
@@ -69,7 +73,7 @@ def train(epoch):
         if epoch <= args.warm:
             warmup_scheduler.step()
 
-    for name, param in net.named_parameters():
+    for name, param in model.named_parameters():
         layer, attr = os.path.splitext(name)
         attr = attr[1:]
         try:
@@ -85,7 +89,7 @@ def train(epoch):
 def eval_training(epoch=0, tb=True):
 
     start = time.time()
-    net.eval()
+    model.eval()
 
     test_loss = 0.0 # cost function error
     correct = 0.0
@@ -96,7 +100,7 @@ def eval_training(epoch=0, tb=True):
             images = images.cuda()
             labels = labels.cuda()
 
-        outputs = net(images)
+        outputs = model(images)
         loss = loss_function(outputs, labels)
 
         test_loss += loss.item()
@@ -132,16 +136,25 @@ if __name__ == '__main__':
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
-    parser.add_argument('-variant_name', type=str, required=True, help='approach variant')
-    parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
-    parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
-    parser.add_argument('-softmax_temp', type=int, default=1, help='cosine similarity softmax temp')
-    parser.add_argument('-stochastic_stride', action='store_true', default=False, help='offset strided filters stochastically to allow overlap')
-    parser.add_argument('-stride', type=int, default=1, help='stride value for the convolutions')
+    # parser.add_argument('-variant_name', type=str, required=True, help='approach variant')
+    # parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
+    # parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
+    # parser.add_argument('-softmax_temp', type=int, default=1, help='cosine similarity softmax temp')
+    # parser.add_argument('-stochastic_stride', action='store_true', default=False, help='offset strided filters stochastically to allow overlap')
+    # parser.add_argument('-stride', type=int, default=1, help='stride value for the convolutions')
+    parser.add_argument(
+        '-variant_config_path', 
+        type=str, 
+        default='configs/convattn.yaml', 
+        help='path to variant configuration'
+    )
     parser.add_argument('-naming_suffix', type=str, default='', help='Add suffix to model name')
     args = parser.parse_args()
 
     net = get_network(args)
+
+    variant_config = read_yaml(args.variant_config_path)
+    model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 
     #data preprocessing:
     cifar100_training_loader = get_training_dataloader(
@@ -161,13 +174,12 @@ if __name__ == '__main__':
     )
 
     loss_function = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    pdb.set_trace()
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
-    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}'.format(
-        args.variant_name, args.position_encoding_dim, args.variant_loc, args.softmax_temp, args.stochastic_stride, args.stride
-        )
+    model_name = name_model(variant_config)
     if args.naming_suffix != '':
         model_name += '_{}'.format(args.naming_suffix)
     if args.resume:
@@ -192,12 +204,16 @@ if __name__ == '__main__':
     input_tensor = torch.Tensor(1, 3, 32, 32)
     if args.gpu:
         input_tensor = input_tensor.cuda()
-    writer.add_graph(net, input_tensor)
+    writer.add_graph(model, input_tensor)
 
     #create checkpoint folder to save model
     if not os.path.exists(checkpoint_path):
         os.makedirs(checkpoint_path)
         print(checkpoint_path)
+    save_yaml(
+        path=os.path.join(checkpoint_path, 'convattn.yaml'),
+        data=variant_config
+    )
     checkpoint_path = os.path.join(checkpoint_path, '{net}-{epoch}-{type}.pth')
 
     best_acc = 0.0
@@ -207,7 +223,7 @@ if __name__ == '__main__':
             weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder, best_weights)
             print('found best acc weights file:{}'.format(weights_path))
             print('load best training file to test acc...')
-            net.load_state_dict(torch.load(weights_path))
+            model.load_state_dict(torch.load(weights_path))
             best_acc = eval_training(tb=False)
             print('best acc is {:0.2f}'.format(best_acc))
 
@@ -216,7 +232,7 @@ if __name__ == '__main__':
             raise Exception('no recent weights file were found')
         weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder, recent_weights_file)
         print('loading weights file {} to resume training.....'.format(weights_path))
-        net.load_state_dict(torch.load(weights_path))
+        model.load_state_dict(torch.load(weights_path))
 
         resume_epoch = last_epoch(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
 
@@ -236,13 +252,13 @@ if __name__ == '__main__':
         if epoch > settings.MILESTONES[1] and best_acc < acc:
             weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='best')
             print('saving weights file to {}'.format(weights_path))
-            torch.save(net.state_dict(), weights_path)
+            torch.save(model.state_dict(), weights_path)
             best_acc = acc
             continue
 
         if not epoch % settings.SAVE_EPOCH:
             weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='regular')
             print('saving weights file to {}'.format(weights_path))
-            torch.save(net.state_dict(), weights_path)
+            torch.save(model.state_dict(), weights_path)
 
     writer.close()

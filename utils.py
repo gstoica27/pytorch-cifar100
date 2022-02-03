@@ -6,7 +6,7 @@ import os
 import sys
 import re
 import datetime
-
+import yaml
 import numpy
 
 import torch
@@ -15,6 +15,38 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
+import conf
+
+
+def name_model(config):
+    formatted_injection_info = ''
+    for info in config['injection_info']:
+        formatted_injection_info += str(tuple(info))
+   
+    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}'.format(
+        config['name'], 
+        config['pos_emb_dim'], 
+        formatted_injection_info, 
+        config['softmax_temp'], 
+        config['apply_stochastic_stride'], 
+        config['stride']
+    )
+    return model_name
+
+def read_yaml(path):
+    return yaml.safe_load(
+        open(
+            os.path.join(
+                path
+            )
+        )
+    )
+
+def save_yaml(path, data, verbose=True):
+    if verbose:
+        print('Saving yaml to: {}'.format(path))
+    with open(path, 'w') as outfile:
+        yaml.dump(data, outfile, default_flow_style=False)
 
 def get_network(args):
     """ return given network
@@ -62,9 +94,9 @@ def get_network(args):
     elif args.net == 'resnet18':
         from models.resnet import resnet18
         net = resnet18(
-            variant_name=args.variant_name, pos_emb_dim=args.position_encoding_dim,
-            softmax_temp=args.softmax_temp, variant_loc=args.variant_loc,
-            stochastic_stride=args.stochastic_stride, stride=args.stride
+            # variant_name=args.variant_name, pos_emb_dim=args.position_encoding_dim,
+            # softmax_temp=args.softmax_temp, variant_loc=args.variant_loc,
+            # stochastic_stride=args.stochastic_stride, stride=args.stride
         )
     elif args.net == 'resnet34':
         from models.resnet import resnet34

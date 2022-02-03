@@ -88,12 +88,53 @@ class CheckLinear(nn.Module):
         output = self.linear(batch)
         return output.permute(0, 3, 1, 2)
 
+class ConvAttnWrapper(nn.Module):
+    def __init__(self, backbone_call, backbone_kwargs, variant_kwargs):
+        super().__init__()
+
+        self.backbone_kwargs = backbone_kwargs
+        self.variant_kwargs = variant_kwargs
+        # instantiate the backbone
+        self.backbone = backbone_call(**backbone_kwargs)
+        # Obtain ordered list of backbone layers | Layer spatial information
+        self.backbone_layers, self.backbone_spatial_shapes = self.backbone.get_network_structure()
+        
+        self.network_structure = self.inject_variant()
+
+    def inject_variant(self):
+        injection_instructions = self.variant_kwargs['injection_info']
+        network_structure = []
+        start_point = 0
+        for injection_instruction in injection_instructions:
+            inject_layer, inject_number, filter_size = injection_instruction
+            # Add backbone layers up to injection point
+            network_structure += self.backbone_layers[start_point: inject_layer]
+            spatial_shape = self.backbone_spatial_shapes[inject_layer]
+            # Stack network modules
+            for i in range(inject_number):                
+                variant_module = csam.ConvolutionalSelfAttention(
+                    spatial_shape=spatial_shape,
+                    filter_size=filter_size,
+                    approach_args=self.variant_kwargs
+                )
+                variant_bn = nn.BatchNorm2d(spatial_shape[-1])
+                network_structure += [variant_module, variant_bn]
+                spatial_shape = variant_module.get_output_shape()
+
+            start_point = inject_layer
+        network_structure += self.backbone_layers[start_point:]
+        network_structure = nn.ModuleList(network_structure)
+        return network_structure
+    
+    def forward(self, batch):
+        return self.network_structure(batch)
+
+
 class ResNet(nn.Module):
 
     def __init__(
-        self, block, num_block, num_classes=100, variant_name='1',
-        pos_emb_dim=0, softmax_temp=1, variant_loc=-1, stochastic_stride=False,
-        stride=1
+        self, block, num_block, num_classes=100, 
+        # variant_name='1', pos_emb_dim=0, softmax_temp=1, variant_locs=[], stochastic_stride=False, stride=1
     ):
         super().__init__()
 
@@ -117,7 +158,8 @@ class ResNet(nn.Module):
 
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
-        self.network_layers = [
+    def get_network_structure(self):
+        network_blocks = [
             self.conv1,
             self.conv2_x,
             self.conv3_x,
@@ -127,30 +169,81 @@ class ResNet(nn.Module):
             torch.nn.Flatten(start_dim=1),
             self.fc
         ]
-        self.variant_name = variant_name
-        self.variant_loc = variant_loc
-        if self.variant_name == 'fc':
-            _, n_channels = self.tensor_dimension[self.variant_loc]
 
-            self.check_fc = CheckLinear(n_channels, n_channels)
-            self.check_bn = nn.BatchNorm2d(n_channels)
-            self.network_layers = self.network_layers[:variant_loc] + [self.check_fc, self.check_bn] + self.network_layers[variant_loc:]
-        elif self.variant_name != 'baseline':
-            # pdb.set_trace()
-            spatial_dim, n_channels = self.tensor_dimension[self.variant_loc]
-            self.csam = csam.ConvolutionalSelfAttention(
-                spatial_shape=[spatial_dim, spatial_dim, n_channels],
-                filter_size=3,
-                approach_args={
-                    'name': variant_name,
-                    'pos_emb_dim': pos_emb_dim,
-                    'softmax_temp': softmax_temp,
-                    'stochastic_stride': stochastic_stride,
-                    'stride': stride
-                },
-                )
-            self.csam_bn = nn.BatchNorm2d(n_channels)
-            self.network_layers = self.network_layers[:variant_loc] + [self.csam, self.csam_bn] + self.network_layers[variant_loc:]
+        spatial_shapes = [
+            [32, 32, 3],
+            [32, 32, 64],
+            [16, 16, 128],
+            [8, 8, 256],
+            [4, 4, 512],
+            [1, 1, 512],
+        ]
+        return network_blocks, spatial_shapes
+
+        # self.network_layers = [
+        #     self.conv1,
+        #     self.conv2_x,
+        #     self.conv3_x,
+        #     self.conv4_x,
+        #     self.conv5_x,
+        #     self.avg_pool,
+        #     torch.nn.Flatten(start_dim=1),
+        #     self.fc
+        # ]
+
+        # self.backbone_layers = {
+        #     0: self.conv1,
+        #     1: self.conv2_x,
+        #     2: self.conv3_x,
+        #     3: self.conv4_x,
+        #     4: self.conv5_x,
+        #     5: self.avg_pool,
+        #     6: torch.nn.Flatten(start_dim=1),
+        #     7: self.fc
+        # }
+        # self.network_layers = []
+
+        # self.variant_name = variant_name
+        # self.variant_locs = variant_locs
+        # if self.variant_name == 'fc':
+        #     for injection_loc in self.variant_locs:
+        #         _, n_channels = self.tensor_dimension[injection_loc]
+
+        #         self.check_fc = CheckLinear(n_channels, n_channels)
+        #         self.check_bn = nn.BatchNorm2d(n_channels)
+        #         self.network_layers = self.network_layers[:variant_loc] + [self.check_fc, self.check_bn] + self.network_layers[variant_loc:]
+        # elif self.variant_name != 'baseline':
+        #     # pdb.set_trace()
+        #     spatial_dim, n_channels = self.tensor_dimension[self.variant_loc]
+        #     self.csam = csam.ConvolutionalSelfAttention(
+        #         spatial_shape=[spatial_dim, spatial_dim, n_channels],
+        #         filter_size=3,
+        #         approach_args={
+        #             'name': variant_name,
+        #             'pos_emb_dim': pos_emb_dim,
+        #             'softmax_temp': softmax_temp,
+        #             'stochastic_stride': stochastic_stride,
+        #             'stride': stride
+        #         },
+        #         )
+        #     self.csam_bn = nn.BatchNorm2d(n_channels)
+        #     self.network_layers = self.network_layers[:variant_loc] + [self.csam, self.csam_bn] + self.network_layers[variant_loc:]
+
+    # def generate_structure(self):
+    #     backbone_layers = {
+    #         0: self.conv1,
+    #         1: self.conv2_x,
+    #         2: self.conv3_x,
+    #         3: self.conv4_x,
+    #         4: self.conv5_x,
+    #         5: self.avg_pool,
+    #         6: torch.nn.Flatten(start_dim=1),
+    #         7: self.fc
+    #     }
+    #     network_layers = []
+    #     for injection_loc in self.variant_locs:
+    #         spatial_dim, n_channels = self.tensor_dimension[injection_loc]
+            
 
     def _make_layer(self, block, out_channels, num_blocks, stride):
         """make resnet layers(by layer i didnt mean this 'layer' was the
@@ -178,18 +271,18 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        # output = self.conv1(x)
+        output = self.conv1(x)
         # pdb.set_trace()
-        # output = self.conv2_x(output)
-        # output = self.conv3_x(output)
-        # # if self.use_csam:
-        # #     # import pdb;pdb.set_trace()
-        # #     output = self.csam(output.permute(0, 2, 3, 1))
-        # #     output = output.permute(0, 3, 1, 2)
-        # #     output = self.csam_bn(output)
-        # output = self.conv4_x(output)
+        output = self.conv2_x(output)
+        output = self.conv3_x(output)
+        # if self.use_csam:
+        #     # import pdb;pdb.set_trace()
+        #     output = self.csam(output.permute(0, 2, 3, 1))
+        #     output = output.permute(0, 3, 1, 2)
+        #     output = self.csam_bn(output)
+        output = self.conv4_x(output)
 
-        # output = self.conv5_x(output)
+        output = self.conv5_x(output)
 
         # if self.use_csam:
         #     # import pdb;pdb.set_trace()
@@ -197,23 +290,30 @@ class ResNet(nn.Module):
         #     output = output.permute(0, 3, 1, 2)
         #     output = self.csam_bn(output)
 
-        # output = self.avg_pool(output)
-        # output = output.view(output.size(0), -1)
-        # output = self.fc(output)
+        output = self.avg_pool(output)
+        output = output.view(output.size(0), -1)
+        output = self.fc(output)
         # pdb.set_trace()
-        output = x
-        for layer in self.network_layers:
-            output = layer(output)
+        # output = x
+        # for layer in self.network_layers:
+        #     output = layer(output)
 
         return output
 
-def resnet18(variant_name='1', pos_emb_dim=0, softmax_temp=1, variant_loc=-1, stochastic_stride=False, stride=1):
+def resnet18(
+    # variant_name='1', 
+    # pos_emb_dim=0, 
+    # softmax_temp=1, 
+    # variant_loc=-1, 
+    # stochastic_stride=False, 
+    # stride=1
+    ):
     """ return a ResNet 18 object
     """
     return ResNet(BasicBlock, [2, 2, 2, 2],
-    variant_name=variant_name, pos_emb_dim=pos_emb_dim,
-    softmax_temp=softmax_temp, variant_loc=variant_loc,
-    stochastic_stride=stochastic_stride, stride=stride
+    # variant_name=variant_name, pos_emb_dim=pos_emb_dim,
+    # softmax_temp=softmax_temp, variant_loc=variant_loc,
+    # stochastic_stride=stochastic_stride, stride=stride
     )
 
 def resnet34():
