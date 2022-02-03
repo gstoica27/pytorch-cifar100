@@ -15,9 +15,9 @@ Modified from: https://github.com/pytorch/examples/blob/master/mnist/main.py
 """
 
 class ConvolutionalSelfAttention(nn.Module):
-    def __init__(self, 
-        spatial_shape, 
-        filter_size, 
+    def __init__(self,
+        spatial_shape,
+        filter_size,
         approach_args={'name': '4', 'padding': 'valid', 'stride': 1}
     ):
         super(ConvolutionalSelfAttention, self).__init__()
@@ -47,7 +47,6 @@ class ConvolutionalSelfAttention(nn.Module):
             self.local_indices = self.local_indices.cuda()
 
     def compute_padding(self, padding_type):
-        pdb.set_trace()
         if padding_type.lower() == 'valid':
             padding_tuple = (0, 0, 0, 0)
         elif padding_type.lower() == 'same':
@@ -59,9 +58,8 @@ class ConvolutionalSelfAttention(nn.Module):
         self.padding_tuple = padding_tuple
         input_padder = nn.ConstantPad2d(padding_tuple, 0.)
         return input_padder
-    
+
     def get_output_shape(self):
-        pdb.set_trace()
         h_dim = (self.spatial_H - self.filter_K + 2 * self.padding_tuple[2]) / self.stride
         w_dim = (self.spatial_W - self.filter_K + 2 * self.padding_tuple[0]) / self.stride
         return [h_dim, w_dim, self.spatial_C]
@@ -123,7 +121,7 @@ class ConvolutionalSelfAttention(nn.Module):
         cell_col_starts = torch.cumsum(torch.cat((torch.zeros(1, dtype=torch.int), cell_widths[:-1])), dim=0)
 
         input_mask = torch.zeros(
-            (num_strided_convs, self.spatial_H + 2 * self.padding_tuple[2], self.spatial_W + 2*self.padding_tuple[0]), 
+            (num_strided_convs, self.spatial_H + 2 * self.padding_tuple[2], self.spatial_W + 2*self.padding_tuple[0]),
             dtype=torch.float32)
         self.local_indices = torch.zeros((num_strided_convs, self.filter_K * self.filter_K))
         conv_idx = 0
@@ -141,7 +139,6 @@ class ConvolutionalSelfAttention(nn.Module):
 
     def split_input(self, batch, mask_X_g=True):
         batch_r = batch.unsqueeze(0)                                                                    # [1,B,H,W,E]
-        # pdb.set_trace()
         if mask_X_g:
             X_g = batch_r * (1 - self.local_mask)                                                       # [F,B,H,W,E]
 
@@ -173,7 +170,6 @@ class ConvolutionalSelfAttention(nn.Module):
 
     def cosine_similarity(self, x, y):
         # Assume x, y are [F,B,*,E]
-        # pdb.set_trace()
         x_normed = torch.nn.functional.normalize(x, dim=-1)
         y_normed = torch.nn.functional.normalize(y, dim=-1)
         if len(x.shape) == 3:
@@ -291,22 +287,20 @@ class ConvAttnWrapper(nn.Module):
         self.backbone = backbone
         # Obtain ordered list of backbone layers | Layer spatial information
         self.backbone_layers, self.backbone_spatial_shapes = self.backbone.get_network_structure()
-        
+
         self.network_structure = self.inject_variant()
 
     def inject_variant(self):
-        pdb.set_trace()
         injection_instructions = self.variant_kwargs['injection_info']
         network_structure = []
         start_point = 0
         for injection_instruction in injection_instructions:
-            pdb.set_trace()
             inject_layer, inject_number, filter_size = injection_instruction
             # Add backbone layers up to injection point
             network_structure += self.backbone_layers[start_point: inject_layer]
             spatial_shape = self.backbone_spatial_shapes[inject_layer-1]
             # Stack network modules
-            for i in range(inject_number):                
+            for i in range(inject_number):
                 variant_module = ConvolutionalSelfAttention(
                     spatial_shape=spatial_shape,
                     filter_size=filter_size,
@@ -318,9 +312,8 @@ class ConvAttnWrapper(nn.Module):
 
             start_point = inject_layer
         network_structure += self.backbone_layers[start_point:]
-        pdb.set_trace()
         network_structure = nn.Sequential(*network_structure)
         return network_structure
-    
+
     def forward(self, batch):
         return self.network_structure(batch)
