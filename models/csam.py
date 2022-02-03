@@ -21,7 +21,6 @@ class ConvolutionalSelfAttention(nn.Module):
         approach_args={'name': '4', 'padding': 'valid', 'stride': 1}
     ):
         super(ConvolutionalSelfAttention, self).__init__()
-        self.spatial_H, self.spatial_W, self.spatial_C = spatial_shape
         self.apply_stochastic_stride = approach_args.get('apply_stochastic_stride', False)
         self.stride = approach_args.get('stride', 1)
         self.filter_K = filter_size
@@ -29,7 +28,10 @@ class ConvolutionalSelfAttention(nn.Module):
         self.approach_name = approach_args['name']
         self.appraoch_args = approach_args
         self.padding_type = approach_args.get('padding', 'valid')
+        self.spatial_H, self.spatial_W, self.spatial_C = spatial_shape
         self.input_padder = self.compute_padding(self.padding_type)
+        self.spatial_H += 2 * self.padding_tuple[2]
+        self.spatial_W += 2 * self.padding_tuple[0]
 
         self.setup_approach()
         self.name2approach = {
@@ -41,7 +43,13 @@ class ConvolutionalSelfAttention(nn.Module):
 
         self.local_mask = self.compute_input_mask()
         if self.approach_name in {'3', '4'}:
-            self.local_mask = self.local_mask.reshape(self.num_convs, 1, self.spatial_H, self.spatial_W, 1)
+            self.local_mask = self.local_mask.reshape(
+                self.num_convs, 
+                1, 
+                self.spatial_H, 
+                self.spatial_W, 
+                1
+            )
         if torch.cuda.is_available():
             self.local_mask = self.local_mask.cuda()
             self.local_indices = self.local_indices.cuda()
@@ -60,8 +68,8 @@ class ConvolutionalSelfAttention(nn.Module):
         return input_padder
 
     def get_output_shape(self):
-        h_dim = (self.spatial_H - self.filter_K + 2 * self.padding_tuple[2]) / self.stride
-        w_dim = (self.spatial_W - self.filter_K + 2 * self.padding_tuple[0]) / self.stride
+        h_dim = (self.spatial_H - self.filter_K) / self.stride
+        w_dim = (self.spatial_W - self.filter_K) / self.stride
         return [h_dim, w_dim, self.spatial_C]
 
     def setup_approach(self):
@@ -106,8 +114,8 @@ class ConvolutionalSelfAttention(nn.Module):
         return cell_lengths
 
     def compute_input_mask(self):
-        convs_height = self.spatial_H - self.filter_K + 1 + self.padding_tuple[2]
-        convs_width = self.spatial_W - self.filter_K + 1 + self.padding_tuple[0]
+        convs_height = self.spatial_H - self.filter_K + 1 #+ self.padding_tuple[2]
+        convs_width = self.spatial_W - self.filter_K + 1 #+ self.padding_tuple[0]
         num_convs = convs_height * convs_width
 
         strided_convs_height = convs_height // self.stride
@@ -121,7 +129,11 @@ class ConvolutionalSelfAttention(nn.Module):
         cell_col_starts = torch.cumsum(torch.cat((torch.zeros(1, dtype=torch.int), cell_widths[:-1])), dim=0)
 
         input_mask = torch.zeros(
-            (num_strided_convs, self.spatial_H + 2 * self.padding_tuple[2], self.spatial_W + 2*self.padding_tuple[0]),
+            (
+                num_strided_convs, 
+                self.spatial_H, #+ 2 * self.padding_tuple[2], 
+                self.spatial_W, # + 2*self.padding_tuple[0]
+            ),
             dtype=torch.float32)
         self.local_indices = torch.zeros((num_strided_convs, self.filter_K * self.filter_K))
         conv_idx = 0
