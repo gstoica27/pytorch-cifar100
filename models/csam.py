@@ -23,10 +23,11 @@ class ConvolutionalSelfAttention(nn.Module):
         super(ConvolutionalSelfAttention, self).__init__()
         self.apply_stochastic_stride = approach_args.get('apply_stochastic_stride', False)
         self.stride = approach_args.get('stride', 1)
+        self.softmax_temp = approach_args.get('softmax_temp', 1.0)
         self.filter_K = filter_size
         self.filter_size = self.filter_K * self.filter_K
         self.approach_name = approach_args['name']
-        self.appraoch_args = approach_args
+        self.approach_args = approach_args
         self.padding_type = approach_args.get('padding', 'valid')
         self.spatial_H, self.spatial_W, self.spatial_C = spatial_shape
         self.input_padder = self.compute_padding(self.padding_type)
@@ -44,10 +45,10 @@ class ConvolutionalSelfAttention(nn.Module):
         self.local_mask = self.compute_input_mask()
         if self.approach_name in {'3', '4'}:
             self.local_mask = self.local_mask.reshape(
-                self.num_convs, 
-                1, 
-                self.spatial_H, 
-                self.spatial_W, 
+                self.num_convs,
+                1,
+                self.spatial_H,
+                self.spatial_W,
                 1
             )
         if torch.cuda.is_available():
@@ -76,8 +77,8 @@ class ConvolutionalSelfAttention(nn.Module):
         self.X_encoding_dim = self.spatial_C                                                        # Call this E
         # Account for positional encodings
         self.maybe_create_positional_encodings()
-        if self.appraoch_args.get('pos_emb_dim', 0) > 0:
-            self.X_encoding_dim += self.appraoch_args['pos_emb_dim']
+        if self.approach_args.get('pos_emb_dim', 0) > 0:
+            self.X_encoding_dim += self.approach_args['pos_emb_dim']
         if self.approach_name == '1':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.filter_K * self.filter_K)
         elif self.approach_name == '2':
@@ -92,8 +93,8 @@ class ConvolutionalSelfAttention(nn.Module):
             raise ValueError('Invalid Approach type')
 
     def maybe_create_positional_encodings(self):
-        if self.appraoch_args.get('pos_emb_dim', 0) > 0:
-            self.positional_encodings = PositionalEncoding2D(self.appraoch_args['pos_emb_dim'])
+        if self.approach_args.get('pos_emb_dim', 0) > 0:
+            self.positional_encodings = PositionalEncoding2D(self.approach_args['pos_emb_dim'])
         else:
             self.positional_encodings = None
 
@@ -114,8 +115,8 @@ class ConvolutionalSelfAttention(nn.Module):
         return cell_lengths
 
     def compute_input_mask(self):
-        convs_height = self.spatial_H - self.filter_K + 1 #+ self.padding_tuple[2]
-        convs_width = self.spatial_W - self.filter_K + 1 #+ self.padding_tuple[0]
+        convs_height = self.spatial_H - self.filter_K + 1
+        convs_width = self.spatial_W - self.filter_K + 1
         num_convs = convs_height * convs_width
 
         strided_convs_height = convs_height // self.stride
@@ -130,9 +131,9 @@ class ConvolutionalSelfAttention(nn.Module):
 
         input_mask = torch.zeros(
             (
-                num_strided_convs, 
-                self.spatial_H, #+ 2 * self.padding_tuple[2], 
-                self.spatial_W, # + 2*self.padding_tuple[0]
+                num_strided_convs,
+                self.spatial_H,
+                self.spatial_W,
             ),
             dtype=torch.float32)
         self.local_indices = torch.zeros((num_strided_convs, self.filter_K * self.filter_K))
@@ -212,7 +213,7 @@ class ConvolutionalSelfAttention(nn.Module):
     def maybe_add_positional_encodings(self, batch):
         if self.positional_encodings is not None:
             positional_encodings = self.positional_encodings(
-                batch[:, :, :, :self.appraoch_args['pos_emb_dim']]                                   # [B,H,W,P]
+                batch[:, :, :, :self.approach_args['pos_emb_dim']]                                   # [B,H,W,P]
             )
             return torch.cat((batch, positional_encodings), dim=-1)                            # [[B,H,W,C];[B,H,W,P]] -> [B,H,W,C+P]
         return batch
@@ -223,7 +224,7 @@ class ConvolutionalSelfAttention(nn.Module):
         batch_flat = batch_pos.flatten(1, 2)                                                        # [B,H,W,C] -> [B,HW,C]
         gX = self.global_transform(batch_flat)                                                      # [B,HW,C] -> [B,HW,1]
         cos_sim = self.cosine_similarity(batch_flat, batch_flat)                                    # [B,HW,C]x[B,HW,C] -> [B,HW,HW]
-        exp_sim = torch.exp(cos_sim - cos_sim.mean(dim=-1, keepdims=True)[0])                       # [B,HW,HW]
+        exp_sim = torch.exp(cos_sim - cos_sim.mean(dim=-1, keepdim=True)[0])                       # [B,HW,HW]
         exp_sum = torch.einsum('ijk,kl->ijl', exp_sim, global_mask.transpose(1, 0))                 # [B,HW,HW]x[HW,Nc] -> [B,HW,Nc]
         inverted_sum = 1. / exp_sum                                                                 # [B,HW,Nc]
         masked_denominator = inverted_sum * self.local_mask.transpose(1,0).unsqueeze(0)             # [B,HW,Nc]x([Nc,Hw] -> [HW,Nc] -> [1,HW,Nc]) -> [B,HW,Nc]
@@ -237,24 +238,27 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                           # [B,Nc,C] -> [B,F,F,C]
 
     def forward_on_approach3(self, batch):
-        batch_pos = self.maybe_add_positional_encodings(batch)
-        X_l, X_g = self.split_input(batch_pos)
+        X = self.maybe_add_positional_encodings(batch)                                                 # [B,H,W,C]
+        batch_size = X.shape[0]
 
-        X_g_vectors = self.global_transform(X_g)                                                    # [F,B,HW-K^2,C]
+        X_flat_spatial = X.view(-1, self.spatial_H * self.spatial_W, self.spatial_C)                   # [B,HW,C]
+        X_g_vectors = self.global_transform(X_flat_spatial)                                            # [B,HW,C]
 
-        raw_compatibilities = self.cosine_similarity(
-            X_g, X_l                                                                                # [F,B,HW-K^2,C], [F,B,K^2,C]
-        )                                                                                           # [F,B,HW-K^2,K^2]
-        compatabilities = F.softmax(self.appraoch_args['softmax_temp'] * raw_compatibilities, dim=2)
+        convs_height = (self.spatial_H - self.filter_K) // self.stride + 1
+        convs_width = (self.spatial_W - self.filter_K) // self.stride + 1
 
-        W_g = torch.einsum('FBGE,FBGL->FBLE', X_g_vectors, compatabilities)                         # [F,B,K^2,C]
-        X_l = X_l[:, :, :, :self.spatial_C]                                                         # [F,B,K^2,E] -> [F,B,K^2,C]
-        forget_gate = torch.sigmoid(torch.sum(W_g * X_l, dim=-1)).unsqueeze(-1)                     # [F,B,K^2,1]
-
-        convolved_X = (forget_gate * X_l).sum(dim=2).permute(1,0,2)                                 # [F,B,K^2,1] x [F,B,K^2,C] -> [F,B,K^2,C] -> [F,B,C] -> [B,F,C]
-        output = convolved_X.reshape(
-            -1, self.convs_height, self.convs_width, self.spatial_C
-        )                                                                                           # [B,F,C] -> [B,F_H,F_W,C]
+        output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()         # [B,F,F,C]
+        for i in range(0, convs_height, self.stride):
+            for j in range(0, convs_width, self.stride):
+                X_l = X[:, i:i+self.filter_K, j:j+self.filter_K]                                                      # [B,K,K,C]
+                raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', X, X_l)                                        # [B,H,W,K,K]
+                raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
+                raw_compatibilities = raw_compatibilities.view(-1, self.spatial_H * self.spatial_W, self.filter_size) # [B,HW,K^2]
+                compatabilities = F.softmax(self.softmax_temp * raw_compatibilities, dim=1)
+                W_g = torch.einsum('bge,bgl->ble', X_g_vectors, compatabilities)                                      # [B,HW,C] x [B,HW,K^2] -> [B,K^2,C]
+                X_l_flat_spatial = X_l.reshape(-1, self.filter_size, self.spatial_C)                                  # [B,K^2,C]
+                forget_gate = torch.sigmoid(torch.sum(W_g * X_l_flat_spatial, dim=-1)).unsqueeze(-1)                  # [B,K^2,1]
+                output[:, i, j] = (forget_gate * X_l_flat_spatial).sum(dim=1)                                         # [B,K^2,1] x [B,K^2,C] -> [B,K^2,C] -> [B,C]
         return output
 
     def forward_on_approach4(self, batch):
@@ -269,7 +273,7 @@ class ConvolutionalSelfAttention(nn.Module):
             keys, queries                                                                           # [1,B,HW,E], [F,B,K^2,E]
         )                                                                                           # [F,B,HW,K^2]
         compatabilities = F.softmax(
-            self.appraoch_args['softmax_temp'] * raw_compatibilities,
+            self.approach_args['softmax_temp'] * raw_compatibilities,
             dim=2
         )
         elem_mul = values * compatabilities                                                         # [1,B,HW,1] x [F,B,HW,K^2] -> [F,B,HW,K^2]
