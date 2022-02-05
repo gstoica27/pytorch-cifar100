@@ -240,9 +240,9 @@ class ConvolutionalSelfAttention(nn.Module):
     def forward_on_approach3(self, batch):
         X = self.maybe_add_positional_encodings(batch)                                                 # [B,H,W,C]
         batch_size = X.shape[0]
-
-        X_flat_spatial = X.view(-1, self.spatial_H * self.spatial_W, self.spatial_C)                   # [B,HW,C]
+        X_flat_spatial = X.view(-1, self.spatial_H * self.spatial_W, X.shape[-1])                      # [B,HW,C]
         X_g_vectors = self.global_transform(X_flat_spatial)                                            # [B,HW,C]
+        X = X[:, :, :, :self.spatial_C]
 
         convs_height = (self.spatial_H - self.filter_K) // self.stride + 1
         convs_width = (self.spatial_W - self.filter_K) // self.stride + 1
