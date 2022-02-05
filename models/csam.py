@@ -33,6 +33,7 @@ class ConvolutionalSelfAttention(nn.Module):
         self.input_padder = self.compute_padding(self.padding_type)
         self.spatial_H += 2 * self.padding_tuple[2]
         self.spatial_W += 2 * self.padding_tuple[0]
+        self.spatial_H, self.spatial_W = int(self.spatial_H), int(self.spatial_W)
 
         self.setup_approach()
         self.name2approach = {
@@ -119,9 +120,9 @@ class ConvolutionalSelfAttention(nn.Module):
         convs_width = self.spatial_W - self.filter_K + 1
         num_convs = convs_height * convs_width
 
-        strided_convs_height = convs_height // self.stride
-        strided_convs_width = convs_width // self.stride
-        num_strided_convs = strided_convs_height * strided_convs_width
+        strided_convs_height = int(convs_height // self.stride)
+        strided_convs_width = int(convs_width // self.stride)
+        num_strided_convs = int(strided_convs_height * strided_convs_width)
 
         cell_heights = self.compute_cell_lengths(strided_convs_height, convs_height)
         cell_widths = self.compute_cell_lengths(strided_convs_width, convs_width)
@@ -239,13 +240,13 @@ class ConvolutionalSelfAttention(nn.Module):
 
     def forward_on_approach3(self, batch):
         X = self.maybe_add_positional_encodings(batch)                                                 # [B,H,W,C]
-        batch_size = X.shape[0]
-        X_flat_spatial = X.view(-1, self.spatial_H * self.spatial_W, X.shape[-1])                      # [B,HW,C]
+        batch_size, H, W, _ = X.shape
+        X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                # [B,HW,C]
         X_g_vectors = self.global_transform(X_flat_spatial)                                            # [B,HW,C]
         X = X[:, :, :, :self.spatial_C]
 
-        convs_height = (self.spatial_H - self.filter_K) // self.stride + 1
-        convs_width = (self.spatial_W - self.filter_K) // self.stride + 1
+        convs_height = (H - self.filter_K) // self.stride + 1
+        convs_width = (W - self.filter_K) // self.stride + 1
 
         output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()         # [B,F,F,C]
         for i in range(0, convs_height, self.stride):
@@ -253,7 +254,7 @@ class ConvolutionalSelfAttention(nn.Module):
                 X_l = X[:, i:i+self.filter_K, j:j+self.filter_K]                                                      # [B,K,K,C]
                 raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', X, X_l)                                        # [B,H,W,K,K]
                 raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
-                raw_compatibilities = raw_compatibilities.view(-1, self.spatial_H * self.spatial_W, self.filter_size) # [B,HW,K^2]
+                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                           # [B,HW,K^2]
                 compatabilities = F.softmax(self.softmax_temp * raw_compatibilities, dim=1)
                 W_g = torch.einsum('bge,bgl->ble', X_g_vectors, compatabilities)                                      # [B,HW,C] x [B,HW,K^2] -> [B,K^2,C]
                 X_l_flat_spatial = X_l.reshape(-1, self.filter_size, self.spatial_C)                                  # [B,K^2,C]
