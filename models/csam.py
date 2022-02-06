@@ -70,8 +70,8 @@ class ConvolutionalSelfAttention(nn.Module):
         return input_padder
 
     def get_output_shape(self):
-        h_dim = int((self.spatial_H - self.filter_K + 1) / self.stride)
-        w_dim = int((self.spatial_W - self.filter_K + 1) / self.stride)
+        h_dim = int((self.spatial_H - self.filter_K) / self.stride) + 1
+        w_dim = int((self.spatial_W - self.filter_K) / self.stride) + 1
         return [h_dim, w_dim, self.spatial_C]
 
     def setup_approach(self):
