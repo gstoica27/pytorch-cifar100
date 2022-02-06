@@ -70,8 +70,8 @@ class ConvolutionalSelfAttention(nn.Module):
         return input_padder
 
     def get_output_shape(self):
-        h_dim = (self.spatial_H - self.filter_K) / self.stride
-        w_dim = (self.spatial_W - self.filter_K) / self.stride
+        h_dim = int((self.spatial_H - self.filter_K + 1) / self.stride)
+        w_dim = int((self.spatial_W - self.filter_K + 1) / self.stride)
         return [h_dim, w_dim, self.spatial_C]
 
     def setup_approach(self):
@@ -225,7 +225,7 @@ class ConvolutionalSelfAttention(nn.Module):
         batch_flat = batch_pos.flatten(1, 2)                                                        # [B,H,W,C] -> [B,HW,C]
         gX = self.global_transform(batch_flat)                                                      # [B,HW,C] -> [B,HW,1]
         cos_sim = self.cosine_similarity(batch_flat, batch_flat)                                    # [B,HW,C]x[B,HW,C] -> [B,HW,HW]
-        exp_sim = torch.exp(cos_sim - cos_sim.mean(dim=-1, keepdim=True)[0])                       # [B,HW,HW]
+        exp_sim = torch.exp(cos_sim - cos_sim.mean(dim=-1, keepdim=True)[0])                        # [B,HW,HW]
         exp_sum = torch.einsum('ijk,kl->ijl', exp_sim, global_mask.transpose(1, 0))                 # [B,HW,HW]x[HW,Nc] -> [B,HW,Nc]
         inverted_sum = 1. / exp_sum                                                                 # [B,HW,Nc]
         masked_denominator = inverted_sum * self.local_mask.transpose(1,0).unsqueeze(0)             # [B,HW,Nc]x([Nc,Hw] -> [HW,Nc] -> [1,HW,Nc]) -> [B,HW,Nc]
