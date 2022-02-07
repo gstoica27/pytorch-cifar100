@@ -28,7 +28,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-net', type=str, required=True, help='net type')
     # parser.add_argument('-weights', type=str, required=True, help='the weights file you want to test')
-    parser.add_argument('-gpu', action='store_true', default=False, help='use gpu or not')
+    parser.add_argument('-gpu', action='store_true', default=True, help='use gpu or not')
     parser.add_argument('-b', type=int, default=16, help='batch size for dataloader')
     # parser.add_argument('-variant_name', type=str, required=True, help='approach variant')
     # parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
@@ -37,7 +37,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_dir', type=str, help='directory of model to load')
 
     args = parser.parse_args()
-    
+
     backbone = get_network(args)
 
     config_path = os.path.join(args.model_dir, 'convattn.yaml')
