@@ -40,7 +40,8 @@ class ConvolutionalSelfAttention(nn.Module):
             '1': self.efficient_approach1,
             '2': self.efficient_approach2,
             '3': self.forward_on_approach3,
-            '4': self.forward_on_approach4
+            '4': self.forward_on_approach4,
+            '4_mem_efficient': self.forward_on_approach4_mem_efficient
         }
 
         self.local_mask = self.compute_input_mask()
@@ -89,7 +90,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.global_transform = nn.Linear(self.X_encoding_dim, 1)
         elif self.approach_name == '3':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
-        elif self.approach_name == '4':
+        elif self.approach_name == '4' or self.approach_name == '4_mem_efficient':
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.value_transform = nn.Linear(self.X_encoding_dim, 1)
@@ -246,9 +247,9 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                           # [B,Nc,C] -> [B,F,F,C]
 
     def forward_on_approach3(self, batch):
-        X = self.maybe_add_positional_encodings(batch)                                                 # [B,H,W,C]
+        X = self.maybe_add_positional_encodings(batch)                                                 # [B,H,W,E]
         batch_size, H, W, _ = X.shape
-        X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                # [B,HW,C]
+        X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                # [B,HW,E]
         X_g_vectors = self.global_transform(X_flat_spatial)                                            # [B,HW,C]
         X = X[:, :, :, :self.spatial_C]
 
@@ -291,6 +292,31 @@ class ConvolutionalSelfAttention(nn.Module):
         output = convolved_X.reshape(
             -1, self.convs_height, self.convs_width, self.spatial_C
         )                                                                                           # [B,F,C] -> [B,F_H,F_W,C]
+        return output
+
+    def forward_on_approach4_mem_efficient(self, batch):
+        X = self.maybe_add_positional_encodings(batch)                                                                # [B,H,W,E]
+        batch_size, H, W, _ = X.shape
+        keys = self.key_transform(X)                                                                                  # [B,H,W,E]
+        all_queries = self.query_transform(X)
+        X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                               # [B,HW,E]
+        values = self.value_transform(X_flat_spatial)                                                                 # [B,HW,1]
+
+        convs_height = (H - self.filter_K) // self.stride + 1
+        convs_width = (W - self.filter_K) // self.stride + 1
+
+        output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()         # [B,F,F,C]
+        for i in range(0, convs_height, self.stride):
+            for j in range(0, convs_width, self.stride):
+                queries = all_queries[:, i:i+self.filter_K, j:j+self.filter_K]                                        # [B,K,K,E]
+                raw_compatibilities = torch.einsum('bhwe,bkje->bhwkj', keys, queries)                                 # [B,H,W,K,K]
+                raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
+                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                           # [B,HW,K^2]
+                compatabilities = F.softmax(self.softmax_temp * raw_compatibilities, dim=1)
+                elem_mul = values * compatabilities                                                                   # [B,HW,1] x [B,HW,K^2] -> [B,HW,K^2]
+                W_g = elem_mul.sum(dim=1).view(-1, self.filter_K, self.filter_K).unsqueeze(-1)                        # [B,HW,K^2] -> [B,K^2] -> [B,K,K] -> [B,K,K,1]
+                X_l = X[:, i:i+self.filter_K, j:j+self.filter_K, :self.spatial_C]                                     # [B,K,K,C]
+                output[:, i, j] = (W_g * X_l).sum(dim=(1,2))                                                          # [B,K,K,1] x [B,K,K,C] -> [B,K,K,C] -> [B,C]
         return output
 
     def forward(self, batch):
