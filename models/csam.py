@@ -1,5 +1,6 @@
 from __future__ import print_function
 import argparse
+from calendar import c
 import random
 import torch
 import torch.nn as nn
@@ -29,11 +30,10 @@ class ConvolutionalSelfAttention(nn.Module):
         self.approach_name = approach_args['name']
         self.approach_args = approach_args
         self.padding_type = approach_args.get('padding', 'valid')
-        self.spatial_H, self.spatial_W, self.spatial_C = spatial_shape
+        self.input_H, self.input_W, self.spatial_C = spatial_shape
         self.input_padder = self.compute_padding(self.padding_type)
-        self.spatial_H += 2 * self.padding_tuple[2]
-        self.spatial_W += 2 * self.padding_tuple[0]
-        self.spatial_H, self.spatial_W = int(self.spatial_H), int(self.spatial_W)
+        self.spatial_H = int(self.input_H + 2 * self.padding_tuple[2])
+        self.spatial_W = int(self.input_W + 2 * self.padding_tuple[0])
 
         self.setup_approach()
         self.name2approach = {
@@ -60,13 +60,16 @@ class ConvolutionalSelfAttention(nn.Module):
         if padding_type.lower() == 'valid':
             padding_tuple = (0, 0, 0, 0)
         elif padding_type.lower() == 'same':
-            padding_x = int((self.stride * (self.spatial_W - 1) - self.spatial_W + self.filter_K) / 2)
-            padding_y = int((self.stride * (self.spatial_H - 1) - self.spatial_H + self.filter_K) / 2)
+            padding_x = int((self.stride * (self.input_W - 1) - self.input_W + self.filter_K) / 2)
+            padding_y = int((self.stride * (self.input_H - 1) - self.input_H + self.filter_K) / 2)
             padding_tuple = (padding_x, padding_x, padding_y, padding_y)
         else:
             raise ValueError('Unknown padding type requested')
         self.padding_tuple = padding_tuple
         input_padder = nn.ConstantPad2d(padding_tuple, 0.)
+        # Compute padding indicator mask
+        padding_mask = torch.zeros((self.input_H, self.input_W))
+        self.padding_mask = input_padder(padding_mask.unsqueeze(0)).squeeze(0)
         return input_padder
 
     def get_output_shape(self):
@@ -137,6 +140,7 @@ class ConvolutionalSelfAttention(nn.Module):
                 self.spatial_W,
             ),
             dtype=torch.float32)
+
         self.local_indices = torch.zeros((num_strided_convs, self.filter_K * self.filter_K))
         conv_idx = 0
         for i_idx, i in enumerate(cell_row_starts):
@@ -144,6 +148,8 @@ class ConvolutionalSelfAttention(nn.Module):
                 offset_i = i + (random.randrange(cell_heights[i_idx]) if self.apply_stochastic_stride else 0)
                 offset_j = j + (random.randrange(cell_widths[j_idx]) if self.apply_stochastic_stride else 0)
                 input_mask[conv_idx, offset_i:offset_i+self.filter_K, offset_j:offset_j+self.filter_K] = 1.
+                pdb.set_trace()
+                input_mask[conv_idx] = F.relu(input_mask[conv_idx] - self.padding_mask) 
                 self.local_indices[conv_idx] = input_mask[conv_idx].reshape(-1).nonzero().sort()[0].reshape(-1)
                 conv_idx += 1
         self.num_convs = strided_convs_height * strided_convs_width
@@ -198,7 +204,8 @@ class ConvolutionalSelfAttention(nn.Module):
         batch = self.maybe_add_positional_encodings(batch)
         batch_flat = batch.flatten(1,2)                                                             # [B,H,W,C] -> [B,HW,C]
         gX = self.global_transform(batch_flat)                                                      # [B,HW,C] -> [B,HW,K^2]
-        global_mask = 1 - self.local_mask                                                           # [Nc,HW]
+        pdb.set_trace()
+        global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                      # [Nc,HW]
         convolutions = torch.einsum(
             'ijk,kl->ijl',
             gX.transpose(2, 1),                                                                     # [B,HW,K^2] -> [B,K^2,HW]
@@ -221,7 +228,7 @@ class ConvolutionalSelfAttention(nn.Module):
 
     def efficient_approach2(self, batch):
         batch_pos = self.maybe_add_positional_encodings(batch)
-        global_mask = 1 - self.local_mask                                                           # [Nc, HW]
+        global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                      # [Nc,HW]
         batch_flat = batch_pos.flatten(1, 2)                                                        # [B,H,W,C] -> [B,HW,C]
         gX = self.global_transform(batch_flat)                                                      # [B,HW,C] -> [B,HW,1]
         cos_sim = self.cosine_similarity(batch_flat, batch_flat)                                    # [B,HW,C]x[B,HW,C] -> [B,HW,HW]
