@@ -176,8 +176,8 @@ if __name__ == '__main__':
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
     model_name = name_model(variant_config)
-    if args.naming_suffix != '':
-        model_name += '_{}'.format(args.naming_suffix)
+    if variant_config['suffix'] not in {None, ''}:
+        model_name += '_{}'.format(variant_config['suffix'])
     if args.resume:
         recent_folder = most_recent_folder(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name), fmt=settings.DATE_FORMAT)
         if not recent_folder:
