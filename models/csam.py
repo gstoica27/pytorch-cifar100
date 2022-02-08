@@ -45,7 +45,7 @@ class ConvolutionalSelfAttention(nn.Module):
         }
 
         self.local_mask = self.compute_input_mask()
-        if self.approach_name in {'3', '4'}:
+        if self.approach_name in {'3', '4', '4_mem_efficient'}:
             new_shape = [self.num_convs, 1, self.spatial_H, self.spatial_W, 1]                      # [Nc,1,H,W,1]
             self.local_mask = self.local_mask.reshape(*new_shape)
             self.padding_mask = self.padding_mask.reshape([1, 1, self.spatial_H, self.spatial_W, 1])
@@ -102,8 +102,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.positional_encodings = None
 
     def masked_softmax(self, vec, mask, dim=1, epsilon=1e-5):
-        # pdb.set_trace()
-        # Taken from: https://discuss.pytorch.org/t/apply-mask-softmax/14212/14
+        # Adapted from: https://discuss.pytorch.org/t/apply-mask-softmax/14212/14
         exps = torch.exp(vec)
         masked_exps = exps * mask
         masked_sums = masked_exps.sum(dim, keepdim=True) + epsilon
@@ -196,7 +195,7 @@ class ConvolutionalSelfAttention(nn.Module):
         return X_l_, X_g_
 
     def cosine_similarity(self, x, y):
-        pdb.set_trace()
+        # pdb.set_trace()
         # Assume x, y are [F,B,*,E]
         x_normed = torch.nn.functional.normalize(x, dim=-1)
         y_normed = torch.nn.functional.normalize(y, dim=-1)
@@ -229,9 +228,9 @@ class ConvolutionalSelfAttention(nn.Module):
     def maybe_add_positional_encodings(self, batch):
         if self.positional_encodings is not None:
             positional_encodings = self.positional_encodings(
-                batch[:, :, :, :self.approach_args['pos_emb_dim']]                                   # [B,H,W,P]
+                batch[:, :, :, :self.approach_args['pos_emb_dim']]                                  # [B,H,W,P]
             )
-            return torch.cat((batch, positional_encodings), dim=-1)                            # [[B,H,W,C];[B,H,W,P]] -> [B,H,W,C+P]
+            return torch.cat((batch, positional_encodings), dim=-1)                                 # [[B,H,W,C];[B,H,W,P]] -> [B,H,W,C+P]
         return batch
 
     def efficient_approach2(self, batch):
@@ -255,17 +254,19 @@ class ConvolutionalSelfAttention(nn.Module):
 
     def forward_on_approach3(self, batch):
         # pdb.set_trace()
-        global_mask = (1 - self.padding_mask - self.local_mask).flatten(start_dim=1, end_dim=-1).reshape(self.convs_height, self.convs_width, -1)                     # [Nc,1,H,W,1] 
+        global_mask = (1 - self.padding_mask - self.local_mask).flatten(
+            start_dim=1, end_dim=-1).reshape(
+                self.convs_height, self.convs_width, -1)                     # [Nc,1,H,W,1] 
         X = self.maybe_add_positional_encodings(batch)                                                                # [B,H,W,E]
         batch_size, H, W, _ = X.shape
         X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                               # [B,HW,E]
         X_g_vectors = self.global_transform(X_flat_spatial)                                                           # [B,HW,C]
-        X = X[:, :, :, :self.spatial_C] # <-- Why? 
+        # X = X[:, :, :, :self.spatial_C] # <-- Why? 
 
         convs_height = self.convs_height #(H - self.filter_K) // self.stride + 1
         convs_width = self.convs_width #(W - self.filter_K) // self.stride + 1
         # For cosine similarity
-        X_normed = torch.nn.functional.normalize(X, dim=-1) # <-- Why are these not normalized? I.e. for cosine similarity?
+        X_normed = torch.nn.functional.normalize(X, dim=-1) 
 
         output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()         # [B,F,F,C]
         for i in range(0, convs_height, self.stride):
@@ -288,7 +289,7 @@ class ConvolutionalSelfAttention(nn.Module):
         return output
 
     def forward_on_approach4(self, batch):
-        global_mask = (1 - self.padding_mask - self.local_mask).flatten(start_dim=1, end_dim=-1)  # [Nc,1,H,W,1]
+        global_mask = (1 - self.padding_mask - self.local_mask).flatten(start_dim=1, end_dim=-1)  # [Nc,1,H,W,1] -> [Nc,HW,1]
         batch_pos = self.maybe_add_positional_encodings(batch)
         X_l, X_g = self.split_input(batch_pos, mask_X_g=False)
 
@@ -303,7 +304,7 @@ class ConvolutionalSelfAttention(nn.Module):
         #     self.approach_args['softmax_temp'] * raw_compatibilities,
         #     dim=2
         # )
-        pdb.set_trace()
+        # pdb.set_trace()
         compatabilities = self.masked_softmax(
             self.softmax_temp * raw_compatibilities,
             global_mask.unsqueeze(1).unsqueeze(-1),
@@ -319,29 +320,30 @@ class ConvolutionalSelfAttention(nn.Module):
         return output
 
     def forward_on_approach4_mem_efficient(self, batch):
-        global_mask = (1 - self.padding_mask - self.local_mask).flatten(start_dim=1, end_dim=-1).reshape(1, self.spatial_H, self.spatial_W, -1, 1)            # [Nc,1,H,W,1]
-        X = self.maybe_add_positional_encodings(batch)                                                                # [B,H,W,E]
+        global_mask = (1 - self.padding_mask - self.local_mask).flatten(                                                # [Nc,1,H,W,1] 
+            start_dim=1, end_dim=-1).reshape(                                                                           # [Nc, HW]
+                self.convs_height, self.convs_width, -1)                                                                # [F,F,HW]
+        X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
         batch_size, H, W, _ = X.shape
-        keys = self.key_transform(X)                                                                                  # [B,H,W,E]
-        all_queries = self.query_transform(X)
-        X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                               # [B,HW,E]
-        values = self.value_transform(X_flat_spatial)                                                                 # [B,HW,1]
+        keys = torch.nn.functional.normalize(self.key_transform(X), dim=-1)
+        all_queries = torch.nn.functional.normalize(self.query_transform(X), dim=-1)
+        X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                                 # [B,HW,E]
+        values = self.value_transform(X_flat_spatial)                                                                   # [B,HW,1]
 
         convs_height = (H - self.filter_K) // self.stride + 1
         convs_width = (W - self.filter_K) // self.stride + 1
 
-        output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()         # [B,F,F,C]
+        output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()           # [B,F,F,C]
         for i in range(0, convs_height, self.stride):
             for j in range(0, convs_width, self.stride):
-                queries = all_queries[:, i:i+self.filter_K, j:j+self.filter_K]                                        # [B,K,K,E]
-                raw_compatibilities = torch.einsum('bhwe,bkje->bhwkj', keys, queries)                                 # [B,H,W,K,K]
+                queries = all_queries[:, i:i+self.filter_K, j:j+self.filter_K]                                          # [B,K,K,E]
+                raw_compatibilities = torch.einsum('bhwe,bkje->bhwkj', keys, queries)                                   # [B,H,W,K,K]
                 raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
-                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                           # [B,HW,K^2]
+                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                             # [B,HW,K^2]
                 # compatabilities = F.softmax(self.softmax_temp * raw_compatibilities, dim=1)
-                pdb.set_trace()
                 compatabilities = self.masked_softmax(
                     self.softmax_temp * raw_compatibilities, 
-                    global_mask[:, i, j, :, :], 
+                    global_mask[i, j].unsqueeze(0).unsqueeze(-1), 
                     dim=1, 
                     epsilon=1e-5
                     )
