@@ -196,7 +196,6 @@ class ConvolutionalSelfAttention(nn.Module):
         return X_l_, X_g_
 
     def cosine_similarity(self, x, y):
-        pdb.set_trace()
         # Assume x, y are [F,B,*,E]
         x_normed = torch.nn.functional.normalize(x, dim=-1)
         y_normed = torch.nn.functional.normalize(y, dim=-1)
