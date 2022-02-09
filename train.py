@@ -1,6 +1,3 @@
-# train.py
-#!/usr/bin/env	python3
-
 """ train network using pytorch
 
 author baiyu
@@ -8,21 +5,13 @@ author baiyu
 
 import pdb
 from ast import parse
-from email.policy import default
 import os
-import sys
 import argparse
 import time
-from datetime import datetime
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torchvision
-import torchvision.transforms as transforms
-
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from models.csam import ConvAttnWrapper
 from conf import settings
@@ -147,10 +136,11 @@ if __name__ == '__main__':
     )
     parser.add_argument('-naming_suffix', type=str, default='', help='Add suffix to model name')
     args = parser.parse_args()
-
+    variant_config = read_yaml(args.variant_config_path)
+    print(variant_config)
     net = get_network(args)
 
-    variant_config = read_yaml(args.variant_config_path)
+    
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 
     #data preprocessing:
@@ -214,23 +204,24 @@ if __name__ == '__main__':
 
     best_acc = 0.0
     if args.resume:
-        best_weights = best_acc_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
+        # pdb.set_trace()
+        best_weights = best_acc_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder))
         if best_weights:
-            weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder, best_weights)
+            weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder, best_weights)
             print('found best acc weights file:{}'.format(weights_path))
             print('load best training file to test acc...')
             model.load_state_dict(torch.load(weights_path))
             best_acc = eval_training(tb=False)
             print('best acc is {:0.2f}'.format(best_acc))
 
-        recent_weights_file = most_recent_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
+        recent_weights_file = most_recent_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder))
         if not recent_weights_file:
             raise Exception('no recent weights file were found')
-        weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder, recent_weights_file)
+        weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder, recent_weights_file)
         print('loading weights file {} to resume training.....'.format(weights_path))
         model.load_state_dict(torch.load(weights_path))
 
-        resume_epoch = last_epoch(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
+        resume_epoch = last_epoch(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder))
 
 
     for epoch in range(1, settings.EPOCH + 1):
