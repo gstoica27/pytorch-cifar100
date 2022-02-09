@@ -307,7 +307,7 @@ def most_recent_weights(weights_folder):
         return most recent created weights file
         if folder is empty return empty string
     """
-    weight_files = os.listdir(weights_folder)
+    weight_files = [i for i in os.listdir(weights_folder) if 'yaml' not in i]
     if len(weights_folder) == 0:
         return ''
 
@@ -331,7 +331,7 @@ def best_acc_weights(weights_folder):
         return the best acc .pth file in given folder, if no
         best acc weights file were found, return empty string
     """
-    files = os.listdir(weights_folder)
+    files = [i for i in os.listdir(weights_folder) if 'yaml' not in i]
     if len(files) == 0:
         return ''
 
