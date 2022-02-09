@@ -1,8 +1,8 @@
-name: '2'
+approach_name: '2'
 pos_emb_dim: 0
 softmax_temp: 1
 injection_info: [   # list of lists
-  [4, 1, 3] # [InjectionLayer,NumStack,FilterSize,PadType]
+  [4, 1, 3] # [InjectionLayer,NumStack,FilterSize]
 ]
 padding: same
 stride: 1

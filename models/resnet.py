@@ -177,7 +177,7 @@ class ResNet(nn.Module):
         #         spatial_shape=[spatial_dim, spatial_dim, n_channels],
         #         filter_size=3,
         #         approach_args={
-        #             'name': variant_name,
+        #             'approach_name': variant_name,
         #             'pos_emb_dim': pos_emb_dim,
         #             'softmax_temp': softmax_temp,
         #             'stochastic_stride': stochastic_stride,

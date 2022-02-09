@@ -15,12 +15,12 @@ from positional_encodings import PositionalEncoding2D
 
 
 class ConvolutionalSelfAttention(nn.Module):
-    def __init__(self, spatial_shape, filter_size, approach_args={'name': '1'}):
+    def __init__(self, spatial_shape, filter_size, approach_args={'approach_name': '1'}):
         super(ConvolutionalSelfAttention, self).__init__()
         self.spatial_H, self.spatial_W, self.spatial_C = spatial_shape
         self.filter_K = filter_size
         self.filter_size = self.filter_K * self.filter_K
-        self.approach_name = approach_args['name']
+        self.approach_name = approach_args['approach_name']
         self.appraoch_args = approach_args
     
         self.setup_approach()    

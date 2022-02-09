@@ -6,8 +6,9 @@
 author baiyu
 """
 
+
 import pdb
-from ast import parse
+from ast import parse, literal_eval
 from email.policy import default
 import os
 import sys
@@ -133,6 +134,15 @@ if __name__ == '__main__':
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
+
+    # Redundant with convattn.yaml
+    parser.add_argument('--approach_name', help='name of the approach: "1", "2", "3", "4". Look at csam.py for full documentation about each of the methods.')
+    parser.add_argument('--pos_emb_dim', help='Dimension of position embedding')
+    parser.add_argument('--softmax_temp', help='Softmax Temperature')
+    parser.add_argument('--injection_info', help='[[InjectionLayer, NumStack, FilterSize], [...]]')
+    parser.add_argument('--stride', help='Size of the stride')
+    parser.add_argument('--apply_stochastic_stride', help='Apply stochastic stride')
+
     # parser.add_argument('-variant_name', type=str, required=True, help='approach variant')
     # parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
     # parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
@@ -151,6 +161,21 @@ if __name__ == '__main__':
     net = get_network(args)
 
     variant_config = read_yaml(args.variant_config_path)
+
+    # Overwrite all file configs with the ones set inline
+    if args.approach_name is not None:
+        variant_config["approach_name"] = args.approach_name
+    if args.pos_emb_dim is not None:
+        variant_config["pos_emb_dim"] = int(args.pos_emb_dim)
+    if args.softmax_temp is not None:
+        variant_config["softmax_temp"] = float(args.softmax_temp)
+    if args.injection_info is not None:
+        variant_config["injection_info"] = literal_eval(args.injection_info)
+    if args.stride is not None:
+        variant_config["stride"] = int(args.stride)
+    if args.apply_stochastic_stride is not None:
+        variant_config["apply_stochastic_stride"] = args.apply_stochastic_stride
+
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 
     #data preprocessing:
@@ -188,73 +213,85 @@ if __name__ == '__main__':
     else:
         checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, settings.TIME_NOW)
 
+    with open('logs/started.txt', 'a') as f:
+        f.write(checkpoint_path)
     print('Saving to: {}'.format(checkpoint_path))
-    #use tensorboard
-    if not os.path.exists(settings.LOG_DIR):
-        os.mkdir(settings.LOG_DIR)
 
-    #since tensorboard can't overwrite old values
-    #so the only way is to create a new tensorboard log
-    writer = SummaryWriter(log_dir=os.path.join(
-            settings.LOG_DIR, args.net, model_name, settings.TIME_NOW))
-    input_tensor = torch.Tensor(1, 3, 32, 32)
-    if args.gpu:
-        input_tensor = input_tensor.cuda()
-    writer.add_graph(model, input_tensor)
+    try:
 
-    #create checkpoint folder to save model
-    if not os.path.exists(checkpoint_path):
-        os.makedirs(checkpoint_path)
-        print(checkpoint_path)
-    save_yaml(
-        path=os.path.join(checkpoint_path, 'convattn.yaml'),
-        data=variant_config
-    )
-    checkpoint_path = os.path.join(checkpoint_path, '{net}-{epoch}-{type}.pth')
+        #use tensorboard
+        if not os.path.exists(settings.LOG_DIR):
+            os.mkdir(settings.LOG_DIR)
 
-    best_acc = 0.0
-    if args.resume:
-        best_weights = best_acc_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
-        if best_weights:
-            weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder, best_weights)
-            print('found best acc weights file:{}'.format(weights_path))
-            print('load best training file to test acc...')
-            model.load_state_dict(torch.load(weights_path))
-            best_acc = eval_training(tb=False)
-            print('best acc is {:0.2f}'.format(best_acc))
+        #since tensorboard can't overwrite old values
+        #so the only way is to create a new tensorboard log
+        writer = SummaryWriter(log_dir=os.path.join(
+                settings.LOG_DIR, args.net, model_name, settings.TIME_NOW))
+        input_tensor = torch.Tensor(1, 3, 32, 32)
+        if args.gpu:
+            input_tensor = input_tensor.cuda()
+        writer.add_graph(model, input_tensor)
 
-        recent_weights_file = most_recent_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
-        if not recent_weights_file:
-            raise Exception('no recent weights file were found')
-        weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder, recent_weights_file)
-        print('loading weights file {} to resume training.....'.format(weights_path))
-        model.load_state_dict(torch.load(weights_path))
+        #create checkpoint folder to save model
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(checkpoint_path)
+            print(checkpoint_path)
+        save_yaml(
+            path=os.path.join(checkpoint_path, 'convattn.yaml'),
+            data=variant_config
+        )
+        checkpoint_path = os.path.join(checkpoint_path, '{net}-{epoch}-{type}.pth')
 
-        resume_epoch = last_epoch(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
-
-
-    for epoch in range(1, settings.EPOCH + 1):
-        if epoch > args.warm:
-            train_scheduler.step(epoch)
-
+        best_acc = 0.0
         if args.resume:
-            if epoch <= resume_epoch:
+            best_weights = best_acc_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
+            if best_weights:
+                weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder, best_weights)
+                print('found best acc weights file:{}'.format(weights_path))
+                print('load best training file to test acc...')
+                model.load_state_dict(torch.load(weights_path))
+                best_acc = eval_training(tb=False)
+                print('best acc is {:0.2f}'.format(best_acc))
+
+            recent_weights_file = most_recent_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
+            if not recent_weights_file:
+                raise Exception('no recent weights file were found')
+            weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder, recent_weights_file)
+            print('loading weights file {} to resume training.....'.format(weights_path))
+            model.load_state_dict(torch.load(weights_path))
+
+            resume_epoch = last_epoch(os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder))
+
+
+        for epoch in range(1, settings.EPOCH + 1):
+            if epoch > args.warm:
+                train_scheduler.step(epoch)
+
+            if args.resume:
+                if epoch <= resume_epoch:
+                    continue
+
+            train(epoch)
+            acc = eval_training(epoch)
+
+            #start to save best performance model after learning rate decay to 0.01
+            if epoch > settings.MILESTONES[1] and best_acc < acc:
+                weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='best')
+                print('saving weights file to {}'.format(weights_path))
+                torch.save(model.state_dict(), weights_path)
+                best_acc = acc
                 continue
 
-        train(epoch)
-        acc = eval_training(epoch)
+            if not epoch % settings.SAVE_EPOCH:
+                weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='regular')
+                print('saving weights file to {}'.format(weights_path))
+                torch.save(model.state_dict(), weights_path)
 
-        #start to save best performance model after learning rate decay to 0.01
-        if epoch > settings.MILESTONES[1] and best_acc < acc:
-            weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='best')
-            print('saving weights file to {}'.format(weights_path))
-            torch.save(model.state_dict(), weights_path)
-            best_acc = acc
-            continue
+        writer.close()
 
-        if not epoch % settings.SAVE_EPOCH:
-            weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='regular')
-            print('saving weights file to {}'.format(weights_path))
-            torch.save(model.state_dict(), weights_path)
+        with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
+            f.write(checkpoint_path)
 
-    writer.close()
+    except :
+        with open('logs/latest_failed_checkpoint_paths.txt', 'a') as f:
+            f.write(checkpoint_path)
