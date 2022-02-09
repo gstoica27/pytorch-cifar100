@@ -1,7 +1,7 @@
 import os
 
 """
-Use this file to bulk run experiments! 
+Use this file to bulk run experiments!
 
 1. Add experiments to the experiment list
 2. Change the conda env name in the main function
@@ -11,35 +11,35 @@ Use this file to bulk run experiments!
 """
 
 # experiment_list = [
-#     # backbone, approach, filter size, stride, location, stacking, position encoding
-#     ["resnet", "2", 3, 1, [5], 1, 10],
-#     ["resnet", "2", 3, 1, [4], 1, 10],
-#     ["resnet", "2", 3, 1, [2], 1, 10],
-#     ["resnet", "2", 3, 1, [2, 3], 1, 10],
-#     ["resnet", "2", 3, 1, [2, 4], 1, 10],
-#     ["resnet", "2", 3, 1, [2, 5], 1, 10],
-#     ["resnet", "2", 3, 1, [3, 4], 1, 10],
-#     ["resnet", "2", 3, 1, [3, 5], 1, 10],
-#     ["resnet", "2", 3, 1, [4, 5], 1, 10],
-#     ["resnet", "2", 3, 1, [2, 3, 4], 1, 10],
-#     ["resnet", "2", 3, 1, [2, 3, 5], 1, 10],
-#     ["resnet", "2", 3, 1, [3, 4, 5], 1, 10],
-#     ["resnet", "2", 3, 1, [2, 3, 4, 5], 1, 10],
+#     # backbone, approach, filter size, stride, location, stacking, position encoding, use_residual_connection
+#     ["resnet", "2", 3, 1, [5], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [4], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [2], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [2, 3], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [2, 4], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [2, 5], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [3, 4], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [3, 5], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [4, 5], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [2, 3, 4], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [2, 3, 5], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [3, 4, 5], 1, 10, "False"],
+#     ["resnet", "2", 3, 1, [2, 3, 4, 5], 1, 10, "False"],
 # ]
 
 # experiment_list = [
-#     # backbone, approach, filter size, stride, location, stacking, position encoding
-#     ["resnet", "3", 3, 1, [3], 1, 0],
-#     ["resnet", "3", 3, 1, [2,3], 1, 0],
-#     ["resnet", "3", 3, 1, [2,4], 1, 0],
-#     ["resnet", "3", 3, 1, [2,5], 1, 0],
-#     ["resnet", "3", 3, 1, [3,4], 1, 0],
-#     ["resnet", "3", 3, 1, [3,5], 1, 0],
-#     ["resnet", "3", 3, 1, [4,5], 1, 0],
-#     ["resnet", "3", 3, 1, [2,3,4], 1, 0],
-#     ["resnet", "3", 3, 1, [2,3,5], 1, 0],
-#     ["resnet", "3", 3, 1, [3,4,5], 1, 0],
-#     ["resnet", "3", 3, 1, [2,3,4,5], 1, 0],
+#     # backbone, approach, filter size, stride, location, stacking, position encoding, use_residual_connection
+#     ["resnet", "3", 3, 1, [3], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [2,3], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [2,4], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [2,5], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [3,4], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [3,5], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [4,5], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [2,3,4], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [2,3,5], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [3,4,5], 1, 0, "False"],
+#     ["resnet", "3", 3, 1, [2,3,4,5], 1, 0, "False"],
 # ]
 
 
@@ -51,6 +51,8 @@ def generate_command(experiment_config, env_name):
         [i, experiment_config[5], experiment_config[2]] for i in experiment_config[4]
     ]
 
+    residual_connection_arg = " --use_residual_connection" if experiment_config[7] == 'True' else ""
+
     out = (
         f"'source ~/anaconda3/etc/profile.d/conda.sh && conda activate {env_name} && "
         "srun -p overcap -A overcap -t 48:00:00"
@@ -58,7 +60,9 @@ def generate_command(experiment_config, env_name):
         + f' --approach_name "{experiment_config[1]}"'
         + f" --pos_emb_dim {experiment_config[6]}"
         + f' --injection_info "{injection_info}"'
-        + f" --stride {experiment_config[3]}'"
+        + f" --stride {experiment_config[3]}"
+        + residual_connection_arg
+        + "'"
     )
 
     return out

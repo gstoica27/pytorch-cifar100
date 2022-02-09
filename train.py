@@ -130,14 +130,9 @@ if __name__ == '__main__':
     parser.add_argument('--softmax_temp', help='Softmax Temperature')
     parser.add_argument('--injection_info', help='[[InjectionLayer, NumStack, FilterSize], [...]]')
     parser.add_argument('--stride', help='Size of the stride')
-    parser.add_argument('--apply_stochastic_stride', help='Apply stochastic stride')
+    parser.add_argument('--apply_stochastic_stride', action='store_true', default=None, help='Apply stochastic stride')
+    parser.add_argument('--use_residual_connection', action='store_true', default=None, help='Use residual connection')
 
-    # parser.add_argument('-variant_name', type=str, required=True, help='approach variant')
-    # parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
-    # parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
-    # parser.add_argument('-softmax_temp', type=int, default=1, help='cosine similarity softmax temp')
-    # parser.add_argument('-stochastic_stride', action='store_true', default=False, help='offset strided filters stochastically to allow overlap')
-    # parser.add_argument('-stride', type=int, default=1, help='stride value for the convolutions')
     parser.add_argument(
         '-variant_config_path',
         type=str,
@@ -165,6 +160,8 @@ if __name__ == '__main__':
         variant_config["stride"] = int(args.stride)
     if args.apply_stochastic_stride is not None:
         variant_config["apply_stochastic_stride"] = args.apply_stochastic_stride
+    if args.use_residual_connection is not None:
+        variant_config["use_residual_connection"] = args.use_residual_connection
 
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 

@@ -7,4 +7,5 @@ injection_info: [   # list of lists
 padding: same
 stride: 1
 apply_stochastic_stride: False
+use_residual_connection: False
 suffix: FixedPad
