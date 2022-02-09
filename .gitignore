@@ -2,3 +2,7 @@
 data
 checkpoint
 runs
+
+# Keeping an empty folder
+logs/*
+!logs/.gitkeep 

@@ -19,7 +19,7 @@ class ConvolutionalSelfAttention(nn.Module):
     def __init__(self,
         spatial_shape,
         filter_size,
-        approach_args={'name': '4', 'padding': 'valid', 'stride': 1}
+        approach_args={'approach_name': '4', 'padding': 'valid', 'stride': 1}
     ):
         super(ConvolutionalSelfAttention, self).__init__()
         self.apply_stochastic_stride = approach_args.get('apply_stochastic_stride', False)
@@ -27,7 +27,7 @@ class ConvolutionalSelfAttention(nn.Module):
         self.softmax_temp = approach_args.get('softmax_temp', 1.0)
         self.filter_K = filter_size
         self.filter_size = self.filter_K * self.filter_K
-        self.approach_name = approach_args['name']
+        self.approach_name = approach_args['approach_name']
         self.approach_args = approach_args
         self.padding_type = approach_args.get('padding', 'valid')
         self.input_H, self.input_W, self.spatial_C = spatial_shape

@@ -24,7 +24,7 @@ def name_model(config):
         formatted_injection_info += str(tuple(info))
    
     model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}'.format(
-        config['name'], 
+        config['approach_name'], 
         config['pos_emb_dim'], 
         formatted_injection_info, 
         config['softmax_temp'], 
