@@ -2,7 +2,8 @@
 data
 checkpoint
 runs
+scripts/run_experiments.sh
 
 # Keeping an empty folder
 logs/*
-!logs/.gitkeep 
+!logs/.gitkeep

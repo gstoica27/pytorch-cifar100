@@ -233,6 +233,7 @@ class ConvolutionalSelfAttention(nn.Module):
         return batch
 
     def efficient_approach2(self, batch):
+        
         batch_pos = self.maybe_add_positional_encodings(batch)
         global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                      # [Nc,HW]
         batch_flat = batch_pos.flatten(1, 2)                                                        # [B,H,W,C] -> [B,HW,C]

@@ -10,11 +10,39 @@ Use this file to bulk run experiments!
 5. This should generate a scripts/run_experiments.sh, which you can execute for your batch run.
 """
 
-experiment_list = [
-    # backbone, approach, filter size, stride, location, stacking, position encoding
-    ["resnet", "1", 3, 1, [1], 1, 0],
-    ["resnet", "1", 3, 1, [1, 2, 3, 4], 1, 0],
-]
+# experiment_list = [
+#     # backbone, approach, filter size, stride, location, stacking, position encoding
+#     ["resnet", "2", 3, 1, [5], 1, 10],
+#     ["resnet", "2", 3, 1, [4], 1, 10],
+#     ["resnet", "2", 3, 1, [2], 1, 10],
+#     ["resnet", "2", 3, 1, [2, 3], 1, 10],
+#     ["resnet", "2", 3, 1, [2, 4], 1, 10],
+#     ["resnet", "2", 3, 1, [2, 5], 1, 10],
+#     ["resnet", "2", 3, 1, [3, 4], 1, 10],
+#     ["resnet", "2", 3, 1, [3, 5], 1, 10],
+#     ["resnet", "2", 3, 1, [4, 5], 1, 10],
+#     ["resnet", "2", 3, 1, [2, 3, 4], 1, 10],
+#     ["resnet", "2", 3, 1, [2, 3, 5], 1, 10],
+#     ["resnet", "2", 3, 1, [3, 4, 5], 1, 10],
+#     ["resnet", "2", 3, 1, [2, 3, 4, 5], 1, 10],
+# ]
+
+# experiment_list = [
+#     # backbone, approach, filter size, stride, location, stacking, position encoding
+#     ["resnet", "3", 3, 1, [3], 1, 0],
+#     ["resnet", "3", 3, 1, [2,3], 1, 0],
+#     ["resnet", "3", 3, 1, [2,4], 1, 0],
+#     ["resnet", "3", 3, 1, [2,5], 1, 0],
+#     ["resnet", "3", 3, 1, [3,4], 1, 0],
+#     ["resnet", "3", 3, 1, [3,5], 1, 0],
+#     ["resnet", "3", 3, 1, [4,5], 1, 0],
+#     ["resnet", "3", 3, 1, [2,3,4], 1, 0],
+#     ["resnet", "3", 3, 1, [2,3,5], 1, 0],
+#     ["resnet", "3", 3, 1, [3,4,5], 1, 0],
+#     ["resnet", "3", 3, 1, [2,3,4,5], 1, 0],
+# ]
+
+
 
 
 def generate_command(experiment_config, env_name):
@@ -25,7 +53,7 @@ def generate_command(experiment_config, env_name):
 
     out = (
         f"'source ~/anaconda3/etc/profile.d/conda.sh && conda activate {env_name} && "
-        "srun"
+        "srun -p overcap -A overcap -t 48:00:00"
         + ' --gres gpu:1 -c 6 python train.py -net "resnet18" '
         + f' --approach_name "{experiment_config[1]}"'
         + f" --pos_emb_dim {experiment_config[6]}"
@@ -70,4 +98,4 @@ def generate_bash_executable(env_name="p3", offset=0):
 
 
 if __name__ == "__main__":
-    generate_bash_executable(env_name="p3", offset=0)
+    generate_bash_executable(env_name="p3", offset=300)

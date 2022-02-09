@@ -215,6 +215,7 @@ if __name__ == '__main__':
 
     with open('logs/started.txt', 'a') as f:
         f.write(checkpoint_path)
+        f.write("\n")
     print('Saving to: {}'.format(checkpoint_path))
 
     try:
@@ -277,6 +278,9 @@ if __name__ == '__main__':
             #start to save best performance model after learning rate decay to 0.01
             if epoch > settings.MILESTONES[1] and best_acc < acc:
                 weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='best')
+                with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
+                    f.write(weights_path)
+                    f.write("\n")
                 print('saving weights file to {}'.format(weights_path))
                 torch.save(model.state_dict(), weights_path)
                 best_acc = acc
@@ -285,13 +289,14 @@ if __name__ == '__main__':
             if not epoch % settings.SAVE_EPOCH:
                 weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='regular')
                 print('saving weights file to {}'.format(weights_path))
+                with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
+                    f.write(weights_path)
+                    f.write("\n")
                 torch.save(model.state_dict(), weights_path)
 
         writer.close()
 
-        with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
-            f.write(checkpoint_path)
-
     except :
         with open('logs/latest_failed_checkpoint_paths.txt', 'a') as f:
             f.write(checkpoint_path)
+            f.write("\n")
