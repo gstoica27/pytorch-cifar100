@@ -22,18 +22,29 @@ class ConvolutionalSelfAttention(nn.Module):
         approach_args={'approach_name': '4', 'padding': 'valid', 'stride': 1}
     ):
         super(ConvolutionalSelfAttention, self).__init__()
-        self.apply_stochastic_stride = approach_args.get('apply_stochastic_stride', False)
-        self.stride = approach_args.get('stride', 1)
-        self.softmax_temp = approach_args.get('softmax_temp', 1.0)
+
+        self.approach_args = approach_args
+        self.approach_name = approach_args['approach_name']
+        self.padding_type = approach_args['padding']
+        self.apply_stochastic_stride = approach_args['apply_stochastic_stride']
+        self.stride = approach_args['stride']
+        self.softmax_temp = approach_args['softmax_temp']
+        self.use_residual_connection = approach_args['use_residual_connection']
+
         self.filter_K = filter_size
         self.filter_size = self.filter_K * self.filter_K
-        self.approach_name = approach_args['approach_name']
-        self.approach_args = approach_args
-        self.padding_type = approach_args.get('padding', 'valid')
+
         self.input_H, self.input_W, self.spatial_C = spatial_shape
         self.input_padder = self.compute_padding(self.padding_type)
         self.spatial_H = int(self.input_H + 2 * self.padding_tuple[2])
         self.spatial_W = int(self.input_W + 2 * self.padding_tuple[0])
+
+        h_convs, w_convs = self.get_num_convs()
+        output_shrunk = h_convs < self.input_H or w_convs < self.input_W
+        if self.use_residual_connection and output_shrunk:
+            self.upsampler = torch.nn.Upsample(size=(self.input_H, self.input_W), mode='bilinear')
+        else:
+            self.upsampler = torch.nn.Identity()
 
         self.setup_approach()
         self.name2approach = {
@@ -71,9 +82,22 @@ class ConvolutionalSelfAttention(nn.Module):
         self.padding_mask = 1 - input_padder(padding_mask.unsqueeze(0)).squeeze(0)
         return input_padder
 
-    def get_output_shape(self):
+    # expects image to be [B,C,H,W]
+    def undo_padding(self, image):
+        _, _, H, W = image.shape
+        left_pad, right_pad, top_pad, bottom_pad = self.padding_tuple
+        return image[:, :, top_pad:H-bottom_pad, left_pad:W-right_pad]
+
+    def get_num_convs(self):
         h_dim = int((self.spatial_H - self.filter_K) / self.stride) + 1
         w_dim = int((self.spatial_W - self.filter_K) / self.stride) + 1
+        return h_dim, w_dim
+
+    def get_output_shape(self):
+        if self.use_residual_connection:
+            h_dim, w_dim = self.input_H, self.input_W
+        else:
+            h_dim, w_dim = self.get_num_convs()
         return [h_dim, w_dim, self.spatial_C]
 
     def setup_approach(self):
@@ -155,8 +179,7 @@ class ConvolutionalSelfAttention(nn.Module):
                 offset_j = j + (random.randrange(cell_widths[j_idx]) if self.apply_stochastic_stride else 0)
                 input_mask[conv_idx, offset_i:offset_i+self.filter_K, offset_j:offset_j+self.filter_K] = 1.
                 self.local_indices[conv_idx] = input_mask[conv_idx].reshape(-1).nonzero().sort()[0].reshape(-1)
-                # pdb.set_trace()
-                input_mask[conv_idx] = F.relu(input_mask[conv_idx] - self.padding_mask) 
+                input_mask[conv_idx] = F.relu(input_mask[conv_idx] - self.padding_mask)
                 conv_idx += 1
         self.num_convs = strided_convs_height * strided_convs_width
         self.convs_height = strided_convs_height
@@ -210,7 +233,6 @@ class ConvolutionalSelfAttention(nn.Module):
         batch = self.maybe_add_positional_encodings(batch)
         batch_flat = batch.flatten(1,2)                                                             # [B,H,W,C] -> [B,HW,C]
         gX = self.global_transform(batch_flat)                                                      # [B,HW,C] -> [B,HW,K^2]
-        # pdb.set_trace()
         global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                      # [Nc,HW]
         convolutions = torch.einsum(
             'ijk,kl->ijl',
@@ -233,7 +255,7 @@ class ConvolutionalSelfAttention(nn.Module):
         return batch
 
     def efficient_approach2(self, batch):
-        
+
         batch_pos = self.maybe_add_positional_encodings(batch)
         global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                      # [Nc,HW]
         batch_flat = batch_pos.flatten(1, 2)                                                        # [B,H,W,C] -> [B,HW,C]
@@ -253,20 +275,18 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                           # [B,Nc,C] -> [B,F,F,C]
 
     def forward_on_approach3(self, batch):
-        # pdb.set_trace()
         global_mask = (1 - self.padding_mask - self.local_mask).flatten(
             start_dim=1, end_dim=-1).reshape(
-                self.convs_height, self.convs_width, -1)                     # [Nc,1,H,W,1] 
+                self.convs_height, self.convs_width, -1)                     # [Nc,1,H,W,1]
         X = self.maybe_add_positional_encodings(batch)                                                                # [B,H,W,E]
         batch_size, H, W, _ = X.shape
         X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                               # [B,HW,E]
         X_g_vectors = self.global_transform(X_flat_spatial)                                                           # [B,HW,C]
-        # X = X[:, :, :, :self.spatial_C] # <-- Why? 
 
-        convs_height = self.convs_height #(H - self.filter_K) // self.stride + 1
-        convs_width = self.convs_width #(W - self.filter_K) // self.stride + 1
+        convs_height = self.convs_height
+        convs_width = self.convs_width
         # For cosine similarity
-        X_normed = torch.nn.functional.normalize(X, dim=-1) 
+        X_normed = torch.nn.functional.normalize(X, dim=-1)
 
         output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()         # [B,F,F,C]
         for i in range(0, convs_height, self.stride):
@@ -275,11 +295,10 @@ class ConvolutionalSelfAttention(nn.Module):
                 raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', X_normed, X_l)                                        # [B,H,W,K,K]
                 raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
                 raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                           # [B,HW,K^2]
-                # compatabilities = F.softmax(self.softmax_temp * raw_compatibilities, dim=1)
                 compatabilities = self.masked_softmax(
-                    self.softmax_temp * raw_compatibilities, 
-                    global_mask[i, j].unsqueeze(0).unsqueeze(-1), 
-                    dim=1, 
+                    self.softmax_temp * raw_compatibilities,
+                    global_mask[i, j].unsqueeze(0).unsqueeze(-1),
+                    dim=1,
                     epsilon=1e-5
                     )
                 W_g = torch.einsum('bge,bgl->ble', X_g_vectors, compatabilities)                                      # [B,HW,C] x [B,HW,K^2] -> [B,K^2,C]
@@ -300,11 +319,6 @@ class ConvolutionalSelfAttention(nn.Module):
         raw_compatibilities = self.cosine_similarity(
             keys, queries                                                                           # [1,B,HW,E], [F,B,K^2,E]
         )                                                                                           # [F,B,HW,K^2]
-        # compatabilities = F.softmax(
-        #     self.approach_args['softmax_temp'] * raw_compatibilities,
-        #     dim=2
-        # )
-        # pdb.set_trace()
         compatabilities = self.masked_softmax(
             self.softmax_temp * raw_compatibilities,
             global_mask.unsqueeze(1).unsqueeze(-1),
@@ -320,7 +334,7 @@ class ConvolutionalSelfAttention(nn.Module):
         return output
 
     def forward_on_approach4_mem_efficient(self, batch):
-        global_mask = (1 - self.padding_mask - self.local_mask).flatten(                                                # [Nc,1,H,W,1] 
+        global_mask = (1 - self.padding_mask - self.local_mask).flatten(                                                # [Nc,1,H,W,1]
             start_dim=1, end_dim=-1).reshape(                                                                           # [Nc, HW]
                 self.convs_height, self.convs_width, -1)                                                                # [F,F,HW]
         X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
@@ -340,11 +354,10 @@ class ConvolutionalSelfAttention(nn.Module):
                 raw_compatibilities = torch.einsum('bhwe,bkje->bhwkj', keys, queries)                                   # [B,H,W,K,K]
                 raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
                 raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                             # [B,HW,K^2]
-                # compatabilities = F.softmax(self.softmax_temp * raw_compatibilities, dim=1)
                 compatabilities = self.masked_softmax(
-                    self.softmax_temp * raw_compatibilities, 
-                    global_mask[i, j].unsqueeze(0).unsqueeze(-1), 
-                    dim=1, 
+                    self.softmax_temp * raw_compatibilities,
+                    global_mask[i, j].unsqueeze(0).unsqueeze(-1),
+                    dim=1,
                     epsilon=1e-5
                     )
                 elem_mul = values * compatabilities                                                                   # [B,HW,1] x [B,HW,K^2] -> [B,HW,K^2]
@@ -361,6 +374,9 @@ class ConvolutionalSelfAttention(nn.Module):
         batch = batch.permute(0, 2, 3, 1)                                                           # [B,C,H,W] -> [B,H,W,C]
         output = self.name2approach[self.approach_name](batch)                                      # [B,C,F,F] -> [B,F,F,C]
         output = output.permute(0, 3, 1, 2)                                                         # [B,F,F,C] -> [B,C,F,F]
+        if self.use_residual_connection:
+            residual = self.undo_padding(batch.permute(0, 3, 1, 2))
+            output = self.upsampler(output) + residual
         return output
 
 class ConvAttnWrapper(nn.Module):
