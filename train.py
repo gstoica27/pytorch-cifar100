@@ -130,14 +130,9 @@ if __name__ == '__main__':
     parser.add_argument('--softmax_temp', help='Softmax Temperature')
     parser.add_argument('--injection_info', help='[[InjectionLayer, NumStack, FilterSize], [...]]')
     parser.add_argument('--stride', help='Size of the stride')
-    parser.add_argument('--apply_stochastic_stride', help='Apply stochastic stride')
+    parser.add_argument('--apply_stochastic_stride', action='store_true', default=None, help='Apply stochastic stride')
+    parser.add_argument('--use_residual_connection', action='store_true', default=None, help='Use residual connection')
 
-    # parser.add_argument('-variant_name', type=str, required=True, help='approach variant')
-    # parser.add_argument('-position_encoding_dim', type=int, default=10, help='positional encoding dimension')
-    # parser.add_argument('-variant_loc', type=int, default=5, help='location where to add module')
-    # parser.add_argument('-softmax_temp', type=int, default=1, help='cosine similarity softmax temp')
-    # parser.add_argument('-stochastic_stride', action='store_true', default=False, help='offset strided filters stochastically to allow overlap')
-    # parser.add_argument('-stride', type=int, default=1, help='stride value for the convolutions')
     parser.add_argument(
         '-variant_config_path',
         type=str,
@@ -165,6 +160,8 @@ if __name__ == '__main__':
         variant_config["stride"] = int(args.stride)
     if args.apply_stochastic_stride is not None:
         variant_config["apply_stochastic_stride"] = args.apply_stochastic_stride
+    if args.use_residual_connection is not None:
+        variant_config["use_residual_connection"] = args.use_residual_connection
 
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 
@@ -205,6 +202,7 @@ if __name__ == '__main__':
 
     with open('logs/started.txt', 'a') as f:
         f.write(checkpoint_path)
+        f.write("\n")
     print('Saving to: {}'.format(checkpoint_path))
 
     try:
@@ -265,6 +263,9 @@ if __name__ == '__main__':
             #start to save best performance model after learning rate decay to 0.01
             if epoch > settings.MILESTONES[1] and best_acc < acc:
                 weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='best')
+                with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
+                    f.write(weights_path)
+                    f.write("\n")
                 print('saving weights file to {}'.format(weights_path))
                 torch.save(model.state_dict(), weights_path)
                 best_acc = acc
@@ -273,13 +274,14 @@ if __name__ == '__main__':
             if not epoch % settings.SAVE_EPOCH:
                 weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='regular')
                 print('saving weights file to {}'.format(weights_path))
+                with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
+                    f.write(weights_path)
+                    f.write("\n")
                 torch.save(model.state_dict(), weights_path)
 
         writer.close()
 
-        with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
-            f.write(checkpoint_path)
-
     except :
         with open('logs/latest_failed_checkpoint_paths.txt', 'a') as f:
             f.write(checkpoint_path)
+            f.write("\n")

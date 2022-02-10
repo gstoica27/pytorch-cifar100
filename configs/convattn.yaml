@@ -1,4 +1,4 @@
-approach_name: '2'
+approach_name: '3'
 pos_emb_dim: 0
 softmax_temp: 1
 injection_info: [   # list of lists
@@ -7,4 +7,5 @@ injection_info: [   # list of lists
 padding: same
 stride: 1
 apply_stochastic_stride: False
+use_residual_connection: False
 suffix: FixedPad
