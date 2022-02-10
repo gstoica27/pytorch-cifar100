@@ -116,6 +116,10 @@ class ConvolutionalSelfAttention(nn.Module):
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.value_transform = nn.Linear(self.X_encoding_dim, 1)
+        elif self.approach_name == '5':
+            self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+            self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+            self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
         else:
             raise ValueError('Invalid Approach type')
 
@@ -360,11 +364,28 @@ class ConvolutionalSelfAttention(nn.Module):
                     dim=1,
                     epsilon=1e-5
                     )
-                elem_mul = values * compatabilities                                                                   # [B,HW,1] x [B,HW,K^2] -> [B,HW,K^2]
-                W_g = elem_mul.sum(dim=1).view(-1, self.filter_K, self.filter_K).unsqueeze(-1)                        # [B,HW,K^2] -> [B,K^2] -> [B,K,K] -> [B,K,K,1]
-                X_l = X[:, i:i+self.filter_K, j:j+self.filter_K, :self.spatial_C]                                     # [B,K,K,C]
-                output[:, i, j] = (W_g * X_l).sum(dim=(1,2))                                                          # [B,K,K,1] x [B,K,K,C] -> [B,K,K,C] -> [B,C]
+                elem_mul = values * compatabilities                                                                     # [B,HW,1] x [B,HW,K^2] -> [B,HW,K^2]
+                W_g = elem_mul.sum(dim=1).view(-1, self.filter_K, self.filter_K).unsqueeze(-1)                          # [B,HW,K^2] -> [B,K^2] -> [B,K,K] -> [B,K,K,1]
+                X_l = X[:, i:i+self.filter_K, j:j+self.filter_K, :self.spatial_C]                                       # [B,K,K,C]
+                output[:, i, j] = (W_g * X_l).sum(dim=(1,2))                                                            # [B,K,K,1] x [B,K,K,C] -> [B,K,K,C] -> [B,C]
         return output
+
+    def forward_on_approach5(self, batch):
+        pdb.set_trace()
+        global_mask = 1 - self.local_mask                                                                               # [Nc,HW]
+        queries = self.query_transform(batch).flatten(1, 2)                                                             # [B,HW,C]
+        values = self.value_transform(batch).flatten(1, 2)                                                              # [B,HW,C]
+        keys = self.key_transform(batch).flatten(1, 2)                                                                  # [B,HW,C]
+
+        cos_sim = self.cosine_similarity(queries, values)                                                               # [B,HW,HW]
+        global_sims = torch.einsum('ijk,kl->ijl', cos_sim, global_mask.T)                                               # [B,HW,Nc]
+        nand_indicator = F.sigmoid(-global_sims)                                                                        # [B,HW,Nc]
+        local_nands = nand_indicator * self.local_mask.transpose().unsqueeze(0)                                         # [B,HW,Nc]
+        grouped_localities = torch.bmm(keys.permute(0, 2, 1), local_nands)                                              # [B,C,HW]x[B,HW,F]
+        output = grouped_localities.permute(0, 2, 1).reshape(-1, self.convs_height, self.convs_width, self.spatial_C)   # [B,C,F] -> [B,F,C] -> [B,F,F,]
+        return output
+
+
 
     def forward(self, batch):
         """
