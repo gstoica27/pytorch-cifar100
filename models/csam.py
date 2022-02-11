@@ -2,6 +2,7 @@ from __future__ import print_function
 import argparse
 from calendar import c
 import random
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -52,7 +53,8 @@ class ConvolutionalSelfAttention(nn.Module):
             '2': self.efficient_approach2,
             '3': self.forward_on_approach3,
             '4': self.forward_on_approach4,
-            '4_mem_efficient': self.forward_on_approach4_mem_efficient
+            '4_mem_efficient': self.forward_on_approach4_mem_efficient,
+            'self_attention': self.forward_on_self_attention
         }
 
         self.local_mask = self.compute_input_mask()
@@ -67,7 +69,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.padding_mask = self.padding_mask.cuda()
 
     def compute_padding(self, padding_type):
-        if padding_type.lower() == 'valid':
+        if padding_type.lower() == 'valid' or self.approach_name == 'self_attention':
             padding_tuple = (0, 0, 0, 0)
         elif padding_type.lower() == 'same':
             padding_x = int((self.stride * (self.input_W - 1) - self.input_W + self.filter_K) / 2)
@@ -117,6 +119,10 @@ class ConvolutionalSelfAttention(nn.Module):
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.value_transform = nn.Linear(self.X_encoding_dim, 1)
         elif self.approach_name == '5':
+            self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+            self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+            self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+        elif self.approach_name == 'self_attention':
             self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
@@ -385,7 +391,17 @@ class ConvolutionalSelfAttention(nn.Module):
         output = grouped_localities.permute(0, 2, 1).reshape(-1, self.convs_height, self.convs_width, self.spatial_C)   # [B,C,F] -> [B,F,C] -> [B,F,F,]
         return output
 
+    # adapted from https://github.com/sooftware/attentions/blob/master/attentions.py
+    def forward_on_self_attention(self, batch):
+        batch_pos = self.maybe_add_positional_encodings(batch)
+        queries = self.query_transform(batch_pos).flatten(1, 2)                                     # [B,HW,C]
+        values = self.value_transform(batch_pos).flatten(1, 2)                                      # [B,HW,C]
+        keys = self.key_transform(batch_pos).flatten(1, 2)                                          # [B,HW,C]
 
+        score = torch.bmm(queries, keys.transpose(1, 2)) / math.sqrt(queries.shape[-1])             # [B,HW,C] x [B,C,HW] -> [B,HW,HW]
+        attn = F.softmax(score, -1)                                                                 # [B,HW,HW]
+        context = torch.bmm(attn, values)                                                           # [B,HW,HW] x [B,HW,C] -> [B,HW,C]
+        return context.reshape(-1, self.input_H, self.input_W, self.spatial_C)                      # [B,HW,C] -> [B,H,W,C]
 
     def forward(self, batch):
         """
