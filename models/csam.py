@@ -54,7 +54,8 @@ class ConvolutionalSelfAttention(nn.Module):
             '3': self.forward_on_approach3,
             '4': self.forward_on_approach4,
             '4_mem_efficient': self.forward_on_approach4_mem_efficient,
-            'self_attention': self.forward_on_self_attention
+            'self_attention': self.forward_on_self_attention,
+            'reversed_self_attention': self.forward_on_reverse_self_attention
         }
 
         self.local_mask = self.compute_input_mask()
@@ -69,7 +70,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.padding_mask = self.padding_mask.cuda()
 
     def compute_padding(self, padding_type):
-        if padding_type.lower() == 'valid' or self.approach_name == 'self_attention':
+        if padding_type.lower() == 'valid' or 'self_attention' in self.approach_name:
             padding_tuple = (0, 0, 0, 0)
         elif padding_type.lower() == 'same':
             padding_x = int((self.stride * (self.input_W - 1) - self.input_W + self.filter_K) / 2)
@@ -106,8 +107,9 @@ class ConvolutionalSelfAttention(nn.Module):
         self.X_encoding_dim = self.spatial_C                                                        # Call this E
         # Account for positional encodings
         self.maybe_create_positional_encodings()
-        if self.approach_args.get('pos_emb_dim', 0) > 0:
-            self.X_encoding_dim += self.approach_args['pos_emb_dim']
+        # if self.approach_args.get('pos_emb_dim', 0) > 0:
+            # self.X_encoding_dim += self.approach_args['pos_emb_dim']
+
         if self.approach_name == '1':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.filter_K * self.filter_K)
         elif self.approach_name == '2':
@@ -118,20 +120,21 @@ class ConvolutionalSelfAttention(nn.Module):
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.value_transform = nn.Linear(self.X_encoding_dim, 1)
-        elif self.approach_name == '5':
+        elif self.approach_name in {'5', 'self_attention', 'reversed_self_attention'}:
             self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
-        elif self.approach_name == 'self_attention':
-            self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
-            self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
-            self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+        # elif self.approach_name == 'self_attention':
+        #     self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+        #     self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+        #     self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
         else:
             raise ValueError('Invalid Approach type')
 
     def maybe_create_positional_encodings(self):
-        if self.approach_args.get('pos_emb_dim', 0) > 0:
-            self.positional_encodings = PositionalEncoding2D(self.approach_args['pos_emb_dim'])
+        if self.approach_args.get('pos_emb_dim', False):
+            # self.positional_encodings = PositionalEncoding2D(self.approach_args['pos_emb_dim'])
+            self.positional_encodings = PositionalEncoding2D(self.spatial_C)
         else:
             self.positional_encodings = None
 
@@ -259,9 +262,11 @@ class ConvolutionalSelfAttention(nn.Module):
     def maybe_add_positional_encodings(self, batch):
         if self.positional_encodings is not None:
             positional_encodings = self.positional_encodings(
-                batch[:, :, :, :self.approach_args['pos_emb_dim']]                                  # [B,H,W,P]
+                # batch[:, :, :, :self.approach_args['pos_emb_dim']]                                  # [B,H,W,P]
+                batch[:, :, :, :self.spatial_C]
             )
-            return torch.cat((batch, positional_encodings), dim=-1)                                 # [[B,H,W,C];[B,H,W,P]] -> [B,H,W,C+P]
+            # return torch.cat((batch, positional_encodings), dim=-1)                                 # [[B,H,W,C];[B,H,W,P]] -> [B,H,W,C+P]
+            return batch + positional_encodings
         return batch
 
     def efficient_approach2(self, batch):
@@ -402,6 +407,19 @@ class ConvolutionalSelfAttention(nn.Module):
         attn = F.softmax(score, -1)                                                                 # [B,HW,HW]
         context = torch.bmm(attn, values)                                                           # [B,HW,HW] x [B,HW,C] -> [B,HW,C]
         return context.reshape(-1, self.input_H, self.input_W, self.spatial_C)                      # [B,HW,C] -> [B,H,W,C]
+
+    def forward_on_reverse_self_attention(self, batch):
+        batch_pos = self.maybe_add_positional_encodings(batch)
+        queries = self.query_transform(batch_pos).flatten(1, 2)                                     # [B,HW,C]
+        values = self.value_transform(batch_pos).flatten(1, 2)                                      # [B,HW,C]
+        keys = self.key_transform(batch_pos).flatten(1, 2)                                          # [B,HW,C]
+
+        score = torch.bmm(queries, keys.transpose(1, 2)) / math.sqrt(queries.shape[-1])             # [B,HW,C] x [B,C,HW] -> [B,HW,HW]
+        attn = F.log_softmax(score, -1)                                                             # [B,HW,HW]
+        joint = torch.exp(attn.sum(-1))                                                             # [B,HW,HW] -> [B,HW]
+        context = values * joint.unsqueeze(-1)                                                      # [B,HW,C] x [B,HW,1]
+        return context.reshape(-1, self.input_H, self.input_W, self.spatial_C)                      # [B,H,W,C]
+
 
     def forward(self, batch):
         """
