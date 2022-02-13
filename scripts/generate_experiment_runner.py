@@ -9,22 +9,57 @@ Use this file to bulk run experiments!
 4. Run "python scripts/generate_experiment_runner.py"
 5. This should generate a scripts/run_experiments.sh, which you can execute for your batch run.
 """
+# Specify configs
+approach_name = 'self_attention'
+filter_sizes = [1]
+strides = [1]
+stackings = [1]
+injection_points = [
+    [2],
+    [3],
+    [4],
+    [5],
+    [2, 3],
+    [2, 4],
+    [2, 5],
+    [3, 4],
+    [3, 5],
+    [4, 5],
+    [2, 3, 4],
+    [2, 3, 5],
+    [3, 4, 5],
+    [2, 3, 4, 5]
+]
+positional_encodings = [10]
+residuals = ['False', 'True']
+# Aggregate specifications
+experiment_list = []
+for stacking in stackings:
+    for injection_point in injection_points:
+        for pos_enc in positional_encodings:
+            for residual in residuals:
+                for filter_size in filter_sizes:
+                    for stride in strides:
+                        experiment_list.append(
+                            ["resnet", approach_name, filter_size, stride, injection_point, stacking, pos_enc, residual]
+                        )
 
 # experiment_list = [
 #     # backbone, approach, filter size, stride, location, stacking, position encoding, use_residual_connection
-#     ["resnet", "2", 3, 1, [5], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [4], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [2], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [2, 3], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [2, 4], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [2, 5], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [3, 4], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [3, 5], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [4, 5], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [2, 3, 4], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [2, 3, 5], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [3, 4, 5], 1, 10, "False"],
-#     ["resnet", "2", 3, 1, [2, 3, 4, 5], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [5], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [4], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [3], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [2], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [2, 3], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [2, 4], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [2, 5], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [3, 4], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [3, 5], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [4, 5], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [2, 3, 4], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [2, 3, 5], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [3, 4, 5], 1, 10, "False"],
+#     ["resnet", approach_name, 3, 1, [2, 3, 4, 5], 1, 10, "False"],
 # ]
 
 # experiment_list = [
@@ -54,7 +89,7 @@ def generate_command(experiment_config, env_name):
     residual_connection_arg = " --use_residual_connection" if experiment_config[7] == 'True' else ""
 
     out = (
-        f"'source ~/anaconda3/etc/profile.d/conda.sh && conda activate {env_name} && "
+        f"'source /srv/share/gstoica3/miniconda3/etc/profile.d/conda.sh && conda activate {env_name} && "
         "srun -p overcap -A overcap -t 48:00:00"
         + ' --gres gpu:1 -c 6 python train.py -net "resnet18" '
         + f' --approach_name "{experiment_config[1]}"'
@@ -85,7 +120,7 @@ def generate_bash_executable(env_name="p3", offset=0):
 
         executable += "\n\n"
 
-        tmux_prefix = f"tmux new-session -d -s CSAM{tmux_ind} "
+        tmux_prefix = f"tmux new-session -d -s CSAM{approach_name.replace('_','')}{tmux_ind} "
         executable += tmux_prefix
 
         command = generate_command(experiment, env_name)
@@ -102,4 +137,4 @@ def generate_bash_executable(env_name="p3", offset=0):
 
 
 if __name__ == "__main__":
-    generate_bash_executable(env_name="p3", offset=300)
+    generate_bash_executable(env_name="cifar", offset=300)
