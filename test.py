@@ -113,4 +113,7 @@ if __name__ == '__main__':
         print('From Checkpoint: {}'.format(best_checkpoint_path))
         subdir2results[subdir] = {'top1err':top1_error, 'top5err': top5_error}
     for subdir, results in subdir2results.items():
-        print('{} | Top1 Error: {} | Top5 Error: {}'.format(results['top1err'], results['top5err']))
+        print('{} | Top1 Error: {} | Top5 Error: {}'.format(
+            subdir.split('/')[0].replace('CSAM_Approach', ''), results['top1err'], results['top5err']
+            )
+        )
