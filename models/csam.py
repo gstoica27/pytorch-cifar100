@@ -304,6 +304,7 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                                               # [B,Nc,C] -> [B,F,F,C]
 
     def forward_on_approach3(self, batch):
+        
         global_mask = (1 - self.padding_mask - self.local_mask).flatten(
             start_dim=1, end_dim=-1).reshape(
                 self.convs_height, self.convs_width, -1)                                                                # [Nc,1,H,W,1]
@@ -330,9 +331,9 @@ class ConvolutionalSelfAttention(nn.Module):
                     dim=1,
                     epsilon=1e-5
                     )
-                W_g = torch.einsum('bge,bgl->ble', X_g_vectors, compatabilities)                                        # [B,HW,C] x [B,HW,K^2] -> [B,K^2,C]
-                X_l_flat_spatial = X_l.reshape(-1, self.filter_size, self.spatial_C)                                    # [B,K^2,C]
-                forget_gate = torch.sigmoid(torch.sum(W_g * X_l_flat_spatial, dim=-1)).unsqueeze(-1)                    # [B,K^2,1]
+                W_g = torch.bmm(compatabilities.transpose(2, 1), X_g_vectors)                                           # ([B,HW,K^2] -> [B,K^2,HW]) x [B,HW,C] -> [B,K^2,C]
+                X_l_flat_spatial = X_l[:,:,:,:self.spatial_C].reshape(-1, self.filter_size, self.spatial_C)             # [B,K^2,C]
+                forget_gate = torch.sigmoid(torch.sum(W_g * X_l_flat_spatial, dim=-1, keepdim=True))                    # [B,K^2,1]
                 output[:, i, j] = (forget_gate * X_l_flat_spatial).sum(dim=1)                                           # [B,K^2,1] x [B,K^2,C] -> [B,K^2,C] -> [B,C]
         return output
 

@@ -48,10 +48,13 @@ if __name__ == '__main__':
             subdirs.append(line.strip().replace('./', ''))
 
     for subdir in subdirs:
-        model_dir = os.path.join(args.checkpoints_dir, args.approach_name, subdir)
-        config_path = os.path.join(model_dir, 'convattn.yaml')
-        variant_config = read_yaml(config_path)
-        model = ConvAttnWrapper(backbone=backbone, variant_kwargs=variant_config).to('cuda:0')
+        try:
+            model_dir = os.path.join(args.checkpoints_dir, args.approach_name, subdir)
+            config_path = os.path.join(model_dir, 'convattn.yaml')
+            variant_config = read_yaml(config_path)
+            model = ConvAttnWrapper(backbone=backbone, variant_kwargs=variant_config).to('cuda:0')
+        except:
+            continue
 
         cifar100_test_loader = get_test_dataloader(
             settings.CIFAR100_TRAIN_MEAN,

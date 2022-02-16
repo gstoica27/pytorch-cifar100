@@ -91,11 +91,11 @@ def eval_training(epoch=0, tb=True):
 
         outputs = model(images)
         loss = loss_function(outputs, labels)
-
+        # import pdb; pdb.set_trace()
         _, pred = outputs.topk(5, 1, largest=True, sorted=True)
 
-        label = label.view(label.size(0), -1).expand_as(pred)
-        correct = pred.eq(label).float()
+        labels = labels.view(labels.size(0), -1).expand_as(pred)
+        correct = pred.eq(labels).float()
 
         #compute top 5
         correct_5 += correct[:, :5].sum()
@@ -208,104 +208,104 @@ if __name__ == '__main__':
     if 'suffix' in variant_config and variant_config['suffix'] not in {None, ''}:
         model_name += '_{}'.format(variant_config['suffix'])
     if args.resume:
-        recent_folder = most_recent_folder(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name), fmt=settings.DATE_FORMAT)
+        recent_folder = most_recent_folder(os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name), fmt=settings.DATE_FORMAT)
         if not recent_folder:
             raise Exception('no recent folder were found')
 
-        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder)
+        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder)
 
     else:
-        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, settings.TIME_NOW)
+        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, settings.TIME_NOW)
 
     with open('logs/started.txt', 'a') as f:
         f.write(checkpoint_path)
         f.write("\n")
     print('Saving to: {}'.format(checkpoint_path))
 
-    # try:
+    try:
 
-    #use tensorboard
-    if not os.path.exists(settings.LOG_DIR):
-        os.mkdir(settings.LOG_DIR)
+        #use tensorboard
+        if not os.path.exists(settings.LOG_DIR):
+            os.mkdir(settings.LOG_DIR)
 
-    #since tensorboard can't overwrite old values
-    #so the only way is to create a new tensorboard log
-    writer = SummaryWriter(log_dir=os.path.join(
-            settings.LOG_DIR, args.net, model_name, settings.TIME_NOW))
-    input_tensor = torch.Tensor(1, 3, 32, 32)
-    if args.gpu:
-        input_tensor = input_tensor.cuda()
-    writer.add_graph(model, input_tensor)
+        #since tensorboard can't overwrite old values
+        #so the only way is to create a new tensorboard log
+        writer = SummaryWriter(log_dir=os.path.join(
+                settings.LOG_DIR, args.net, model_name, settings.TIME_NOW))
+        input_tensor = torch.Tensor(1, 3, 32, 32)
+        if args.gpu:
+            input_tensor = input_tensor.cuda()
+        writer.add_graph(model, input_tensor)
 
-    #create checkpoint folder to save model
-    if not os.path.exists(checkpoint_path):
-        os.makedirs(checkpoint_path)
-        print(checkpoint_path)
-    save_yaml(
-        path=os.path.join(checkpoint_path, 'convattn.yaml'),
-        data=variant_config
-    )
-    checkpoint_path = os.path.join(checkpoint_path, '{net}-{epoch}-{type}.pth')
+        #create checkpoint folder to save model
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(checkpoint_path)
+            print(checkpoint_path)
+        save_yaml(
+            path=os.path.join(checkpoint_path, 'convattn.yaml'),
+            data=variant_config
+        )
+        checkpoint_path = os.path.join(checkpoint_path, '{net}-{epoch}-{type}.pth')
 
-    best_top1 = 0.0
-    best_top5_at_top1 = 0.0
-    best_epoch = 0
-    if args.resume:
-        best_weights = best_acc_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder))
-        if best_weights:
-            weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder, best_weights)
-            print('found best acc weights file:{}'.format(weights_path))
-            print('load best training file to test acc...')
-            model.load_state_dict(torch.load(weights_path))
-            best_top1, best_top5 = eval_training(tb=False)
-            print('best top1 is {:0.2f} | best top5 is: {:0.2f}'.format(best_top1, best_top5))
-
-        recent_weights_file = most_recent_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder))
-        if not recent_weights_file:
-            raise Exception('no recent weights file were found')
-        weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder, recent_weights_file)
-        print('loading weights file {} to resume training.....'.format(weights_path))
-        model.load_state_dict(torch.load(weights_path))
-        resume_epoch = last_epoch(os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, recent_folder))
-
-    for epoch in range(1, settings.EPOCH + 1):
-        if epoch > args.warm:
-            train_scheduler.step(epoch)
-
+        best_top1 = 0.0
+        best_top5_at_top1 = 0.0
+        best_epoch = 0
         if args.resume:
-            if epoch <= resume_epoch:
+            best_weights = best_acc_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder))
+            if best_weights:
+                weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder, best_weights)
+                print('found best acc weights file:{}'.format(weights_path))
+                print('load best training file to test acc...')
+                model.load_state_dict(torch.load(weights_path))
+                best_top1, best_top5 = eval_training(tb=False)
+                print('best top1 is {:0.2f} | best top5 is: {:0.2f}'.format(best_top1, best_top5))
+
+            recent_weights_file = most_recent_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder))
+            if not recent_weights_file:
+                raise Exception('no recent weights file were found')
+            weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, variant_config["approach_name"], recent_folder, recent_weights_file)
+            print('loading weights file {} to resume training.....'.format(weights_path))
+            model.load_state_dict(torch.load(weights_path))
+            resume_epoch = last_epoch(os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder))
+
+        for epoch in range(1, settings.EPOCH + 1):
+            if epoch > args.warm:
+                train_scheduler.step(epoch)
+
+            if args.resume:
+                if epoch <= resume_epoch:
+                    continue
+
+            train(epoch)
+            test_top1, test_top5 = eval_training(epoch)
+
+            #start to save best performance model after learning rate decay to 0.01
+            if epoch > settings.MILESTONES[1] and best_top1 < test_top1:
+                weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='best')
+                with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
+                    f.write(weights_path)
+                    f.write("\n")
+                print('saving weights file to {}'.format(weights_path))
+                torch.save(model.state_dict(), weights_path)
+                best_top1 = test_top1
+                best_top5_at_top1 = test_top5
+                best_epoch = epoch
                 continue
+            print()
+            print('Best Point | Epoch: {} | Top-1: {:.4f} | Top-5: {:.4f}'.format(best_epoch, best_top1, best_top5_at_top1))
+            print('Best Error | Epoch: {} | Top-1: {:.4f} | Top-5: {:.4f}'.format(best_epoch, 1-best_top1, 1-best_top5_at_top1))
+            print()
+            if not epoch % settings.SAVE_EPOCH:3, 4
+                weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='regular')
+                print('saving weights file to {}'.format(weights_path))
+                with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
+                    f.write(weights_path)
+                    f.write("\n")
+                torch.save(model.state_dict(), weights_path)
 
-        train(epoch)
-        test_top1, test_top5 = eval_training(epoch)
+        writer.close()
 
-        #start to save best performance model after learning rate decay to 0.01
-        if epoch > settings.MILESTONES[1] and best_top1 < test_top1:
-            weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='best')
-            with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
-                f.write(weights_path)
-                f.write("\n")
-            print('saving weights file to {}'.format(weights_path))
-            torch.save(model.state_dict(), weights_path)
-            best_top1 = test_top1
-            best_top5_at_top1 = test_top5
-            best_epoch = epoch
-            continue
-        print()
-        print('Best Point | Epoch: {} | Top-1: {:.4f} | Top-5: {:.4f}'.format(best_epoch, best_top1, best_top5))
-        print('Best Error | Epoch: {} | Top-1: {:.4f} | Top-5: {:.4f}'.format(best_epoch, 1-best_top1, 1-best_top5))
-        print()
-        if not epoch % settings.SAVE_EPOCH:
-            weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='regular')
-            print('saving weights file to {}'.format(weights_path))
-            with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
-                f.write(weights_path)
-                f.write("\n")
-            torch.save(model.state_dict(), weights_path)
-
-    writer.close()
-
-    # except :
-    #     with open('logs/latest_failed_checkpoint_paths.txt', 'a') as f:
-    #         f.write(checkpoint_path)
-    #         f.write("\n")
+    except :
+        with open('logs/latest_failed_checkpoint_paths.txt', 'a') as f:
+            f.write(checkpoint_path)
+            f.write("\n")
