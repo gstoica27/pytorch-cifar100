@@ -295,7 +295,7 @@ if __name__ == '__main__':
             print('Best Point | Epoch: {} | Top-1: {:.4f} | Top-5: {:.4f}'.format(best_epoch, best_top1, best_top5_at_top1))
             print('Best Error | Epoch: {} | Top-1: {:.4f} | Top-5: {:.4f}'.format(best_epoch, 1-best_top1, 1-best_top5_at_top1))
             print()
-            if not epoch % settings.SAVE_EPOCH:3, 4
+            if not epoch % settings.SAVE_EPOCH:
                 weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='regular')
                 print('saving weights file to {}'.format(weights_path))
                 with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
