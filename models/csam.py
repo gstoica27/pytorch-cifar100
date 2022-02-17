@@ -58,6 +58,7 @@ class ConvolutionalSelfAttention(nn.Module):
             '5': self.forward_on_approach5,
             '4_mem_efficient': self.forward_on_approach4_mem_efficient,
             'self_attention': self.forward_on_self_attention,
+            'pytorch_self_attention': self.forward_on_pytorch_self_attention,
             'reversed_self_attention_elemwise': self.forward_on_reverse_self_attention,
             'reversed_self_attention_normal': self.forward_on_reverse_self_attention,
             'background_self_attention': self.forward_on_background_self_attention,
@@ -76,7 +77,7 @@ class ConvolutionalSelfAttention(nn.Module):
 
     def compute_padding(self, padding_type):
         if padding_type.lower() == 'valid' or self.approach_name in {
-            'self_attention', 'reversed_self_attention', 
+            'self_attention', 'pytorch_self_attention', 'reversed_self_attention',
             'reversed_self_attention_elemwise', 'reversed_self_attention_normal',
             }:
             padding_tuple = (0, 0, 0, 0)
@@ -132,10 +133,11 @@ class ConvolutionalSelfAttention(nn.Module):
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
         elif self.approach_name in {
-            'self_attention', 'reversed_self_attention', 
+            'self_attention', 'pytorch_self_attention', 'reversed_self_attention',
             'reversed_self_attention_elemwise', 'reversed_self_attention_normal',
             'background_self_attention'
             }:
+            self.output_proj = nn.Linear(self.spatial_C, self.spatial_C)
             self.key_transform = nn.Linear(self.spatial_C, self.spatial_C)
             self.query_transform = nn.Linear(self.spatial_C, self.spatial_C)
             self.value_transform = nn.Linear(self.spatial_C, self.spatial_C)
@@ -304,7 +306,7 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                                               # [B,Nc,C] -> [B,F,F,C]
 
     def forward_on_approach3(self, batch):
-        
+
         global_mask = (1 - self.padding_mask - self.local_mask).flatten(
             start_dim=1, end_dim=-1).reshape(
                 self.convs_height, self.convs_width, -1)                                                                # [Nc,1,H,W,1]
@@ -423,6 +425,22 @@ class ConvolutionalSelfAttention(nn.Module):
         context = torch.bmm(attn, values)                                                                               # [B,HW,HW] x [B,HW,C] -> [B,HW,C]
         return context.reshape(-1, self.input_H, self.input_W, self.spatial_C)                                          # [B,HW,C] -> [B,H,W,C]
 
+    def forward_on_pytorch_self_attention(self, batch):
+        batch_pos = self.maybe_add_positional_encodings(batch).flatten(1, 2).transpose(1, 0)
+        in_proj_bias = torch.cat((self.query_transform._parameters['bias'], self.key_transform._parameters['bias'], self.value_transform._parameters['bias']))
+        attn_output, attn_output_weights = F.multi_head_attention_forward(
+                batch_pos, batch_pos, batch_pos, self.spatial_C, 1, # q, k, v, dim, heads
+                None, in_proj_bias, # in_proj and in_proj bias
+                None, None, False, # bias_k, bias_v, add_zero_attn
+                0, self.output_proj._parameters['weight'], self.output_proj._parameters['bias'], # dropout, out proj weight, out proj bias
+                training=True,
+                key_padding_mask=None, need_weights=False,
+                attn_mask=None, use_separate_proj_weight=True,
+                q_proj_weight=self.query_transform._parameters['weight'], k_proj_weight=self.key_transform._parameters['weight'],
+                v_proj_weight=self.value_transform._parameters['weight'])
+
+        return attn_output.transpose(1, 0).reshape(-1, self.input_H, self.input_W, self.spatial_C)
+
     def forward_on_reverse_self_attention(self, batch):
         batch_pos = self.maybe_add_positional_encodings(batch)
         queries = self.query_transform(batch_pos).flatten(1, 2)                                                         # [B,HW,C]
@@ -436,7 +454,7 @@ class ConvolutionalSelfAttention(nn.Module):
         elif self.approach_name == 'reversed_self_attention_elemwise':
             attn = F.softmax(score, 1)                                                                                  # [B,HW,HW]
             expectation_fn = torch.bmm(attn, values)                                                                    # [B,HW,HW] x [B,HW,C] -> [B,HW,C]
-        
+
         context = expectation_fn * values                                                                               # [B,HW,C] x [B,HW,C] -> [B,HW,C]
         return context.reshape(-1, self.input_H, self.input_W, self.spatial_C)                                          # [B,H,W,C]
 
@@ -447,7 +465,7 @@ class ConvolutionalSelfAttention(nn.Module):
         global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                                          # [Nc,HW]
         scaled_batch = (batch_pos * self.elem_scales).flatten(1, 2)                                                     # [B,H,W,C] x [B,H,W,C] -> [B,HW,C]
         scaled_global = torch.matmul(scaled_batch.permute(0, 2, 1), global_mask.transpose(1,0)).permute(0, 2, 1)        # ([B,HW,C] -> [B,C,HW]) x ([Nc,HW] -> [HW,Nc]) -> [B,C,Nc] -> [B,Nc,C]
-        
+
         global_queries = self.query_transform(scaled_global)                                                            # [B,Nc,C]
         local_values = self.value_transform(batch_pos).flatten(1, 2)                                                    # [B,HW,C]
         local_keys = self.key_transform(batch_pos).flatten(1, 2)                                                        # [B,HW,C]
@@ -457,7 +475,7 @@ class ConvolutionalSelfAttention(nn.Module):
         score = torch.bmm(global_queries, local_keys.transpose(1, 2)) / math.sqrt(global_queries.shape[-1])             # [B,Nc,C] x ([B,HW,C] -> [B,C,HW]) -> [B,Nc,HW]
         attn = self.masked_softmax(vec=score, mask=self.local_mask.unsqueeze(0), dim=-1)                                # [B,Nc,HW]
         convolution = torch.bmm(attn, local_values)                                                                     # [B,Nc,HW] x [B,HW,C] -> [B,Nc,C]
-        if convolution.isnan().sum() > 0: 
+        if convolution.isnan().sum() > 0:
             pdb.set_trace()
             print('Crap!')
         return convolution.reshape(-1, self.input_H, self.input_W, self.spatial_C)
