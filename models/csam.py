@@ -137,12 +137,16 @@ class ConvolutionalSelfAttention(nn.Module):
             'reversed_self_attention_elemwise', 'reversed_self_attention_normal',
             'background_self_attention'
             }:
-            self.output_proj = nn.Linear(self.spatial_C, self.spatial_C)
             self.key_transform = nn.Linear(self.spatial_C, self.spatial_C)
             self.query_transform = nn.Linear(self.spatial_C, self.spatial_C)
             self.value_transform = nn.Linear(self.spatial_C, self.spatial_C)
             if self.approach_name == 'background_self_attention':
-                self.elem_scales = nn.Parameter(torch.rand(self.spatial_H, self.spatial_W, 1, requires_grad=True))
+                elem_scales_init = torch.rand(self.spatial_H, self.spatial_W, 1, requires_grad=True)
+                with torch.no_grad():
+                    elem_scales_init = elem_scales_init.view(self.spatial_H * self.spatial_W, 1)
+                    elem_scales_init = F.normalize(elem_scales_init, dim=0)
+                    elem_scales_init = elem_scales_init.view(self.spatial_H, self.spatial_W, 1)
+                self.elem_scales = nn.Parameter(elem_scales_init)
         else:
             raise ValueError('Invalid Approach type')
 
@@ -432,7 +436,7 @@ class ConvolutionalSelfAttention(nn.Module):
                 batch_pos, batch_pos, batch_pos, self.spatial_C, 1, # q, k, v, dim, heads
                 None, in_proj_bias, # in_proj and in_proj bias
                 None, None, False, # bias_k, bias_v, add_zero_attn
-                0, self.output_proj._parameters['weight'], self.output_proj._parameters['bias'], # dropout, out proj weight, out proj bias
+                0, torch.eye(self.spatial_C).cuda(), torch.zeros(self.spatial_C).cuda(), # dropout, out proj weight, out proj bias
                 training=True,
                 key_padding_mask=None, need_weights=False,
                 attn_mask=None, use_separate_proj_weight=True,
@@ -459,10 +463,9 @@ class ConvolutionalSelfAttention(nn.Module):
         return context.reshape(-1, self.input_H, self.input_W, self.spatial_C)                                          # [B,H,W,C]
 
     def forward_on_background_self_attention(self, batch):
-        # pdb.set_trace()
         batch_pos = self.maybe_add_positional_encodings(batch)
 
-        global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                                          # [Nc,HW]
+        global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                                          # [Nc,HW
         scaled_batch = (batch_pos * self.elem_scales).flatten(1, 2)                                                     # [B,H,W,C] x [B,H,W,C] -> [B,HW,C]
         scaled_global = torch.matmul(scaled_batch.permute(0, 2, 1), global_mask.transpose(1,0)).permute(0, 2, 1)        # ([B,HW,C] -> [B,C,HW]) x ([Nc,HW] -> [HW,Nc]) -> [B,C,Nc] -> [B,Nc,C]
 
@@ -476,7 +479,7 @@ class ConvolutionalSelfAttention(nn.Module):
         attn = self.masked_softmax(vec=score, mask=self.local_mask.unsqueeze(0), dim=-1)                                # [B,Nc,HW]
         convolution = torch.bmm(attn, local_values)                                                                     # [B,Nc,HW] x [B,HW,C] -> [B,Nc,C]
         if convolution.isnan().sum() > 0:
-            pdb.set_trace()
+            #pdb.set_trace()
             print('Crap!')
         return convolution.reshape(-1, self.input_H, self.input_W, self.spatial_C)
 

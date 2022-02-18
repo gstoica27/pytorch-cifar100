@@ -40,11 +40,11 @@ def train(epoch):
 
         last_layer = list(model.children())[-1]
         for name, para in last_layer.named_parameters():
-            # if para.grad is not None:
-            if 'weight' in name:
-                writer.add_scalar('LastLayerGradients/grad_norm2_weights', para.grad.norm(), n_iter)
-            if 'bias' in name:
-                writer.add_scalar('LastLayerGradients/grad_norm2_bias', para.grad.norm(), n_iter)
+            if para.grad is not None:
+                if 'weight' in name:
+                    writer.add_scalar('LastLayerGradients/grad_norm2_weights', para.grad.norm(), n_iter)
+                if 'bias' in name:
+                    writer.add_scalar('LastLayerGradients/grad_norm2_bias', para.grad.norm(), n_iter)
 
         if batch_index % 10 == 0:
             print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}'.format(
