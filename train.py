@@ -9,6 +9,8 @@ from ast import parse, literal_eval
 import os
 import argparse
 import time
+import random 
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -149,6 +151,7 @@ if __name__ == '__main__':
     parser.add_argument('--stride', help='Size of the stride')
     parser.add_argument('--apply_stochastic_stride', action='store_true', default=None, help='Apply stochastic stride')
     parser.add_argument('--use_residual_connection', action='store_true', default=None, help='Use residual connection')
+    parser.add_argument('--seed', default=17, type=int)
 
     parser.add_argument(
         '-variant_config_path',
@@ -158,6 +161,12 @@ if __name__ == '__main__':
     )
     parser.add_argument('-naming_suffix', type=str, default='', help='Add suffix to model name')
     args = parser.parse_args()
+
+    # Init Seeds
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
     variant_config = read_yaml(args.variant_config_path)
     print(variant_config)
     net = get_network(args)

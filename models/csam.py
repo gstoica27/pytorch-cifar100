@@ -2,6 +2,7 @@ from __future__ import print_function
 import argparse
 from calendar import c
 import random
+import pdb
 import math
 import torch
 import torch.nn as nn
@@ -9,7 +10,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
-import pdb
+import numpy as np
 from tqdm import tqdm
 from positional_encodings import PositionalEncoding2D
 """
@@ -48,7 +49,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.upsampler = torch.nn.Upsample(size=(self.input_H, self.input_W), mode='bilinear')
         else:
             self.upsampler = torch.nn.Identity()
-
+        self.local_mask = self.compute_input_mask()
         self.setup_approach()
         self.name2approach = {
             '1': self.efficient_approach1,
@@ -63,7 +64,6 @@ class ConvolutionalSelfAttention(nn.Module):
             'background_self_attention': self.forward_on_background_self_attention,
         }
 
-        self.local_mask = self.compute_input_mask()
         if self.approach_name in {'3', '4', '4_mem_efficient'}:
             new_shape = [self.num_convs, 1, self.spatial_H, self.spatial_W, 1]                                      # [Nc,1,H,W,1]
             self.local_mask = self.local_mask.reshape(*new_shape)
@@ -123,6 +123,9 @@ class ConvolutionalSelfAttention(nn.Module):
             self.global_transform = nn.Linear(self.X_encoding_dim, 1)
         elif self.approach_name == '3':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+            self.indices = np.array([(i, j) for i in range(self.convs_height) for j in range(self.convs_width)])
+            if 'random_k' in self.approach_args:
+                self.random_k = self.approach_args['random_k']
         elif self.approach_name == '4' or self.approach_name == '4_mem_efficient':
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
@@ -304,7 +307,6 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                                               # [B,Nc,C] -> [B,F,F,C]
 
     def forward_on_approach3(self, batch):
-        
         global_mask = (1 - self.padding_mask - self.local_mask).flatten(
             start_dim=1, end_dim=-1).reshape(
                 self.convs_height, self.convs_width, -1)                                                                # [Nc,1,H,W,1]
@@ -313,28 +315,35 @@ class ConvolutionalSelfAttention(nn.Module):
         X_flat_spatial = X.view(-1, H * W, X.shape[-1])                                                                 # [B,HW,E]
         X_g_vectors = self.global_transform(X_flat_spatial)                                                             # [B,HW,C]
 
-        convs_height = self.convs_height
-        convs_width = self.convs_width
+        # convs_height = self.convs_height
+        # convs_width = self.convs_width
         # For cosine similarity
         X_normed = torch.nn.functional.normalize(X, dim=-1)
 
-        output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()           # [B,F,F,C]
-        for i in range(0, convs_height, self.stride):
-            for j in range(0, convs_width, self.stride):
-                X_l = X_normed[:, i:i+self.filter_K, j:j+self.filter_K]                                                 # [B,K,K,C]
-                raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', X_normed, X_l)                                   # [B,H,W,K,K]
-                raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
-                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                             # [B,HW,K^2]
-                compatabilities = self.masked_softmax(
-                    self.softmax_temp * raw_compatibilities,
-                    global_mask[i, j].unsqueeze(0).unsqueeze(-1),
-                    dim=1,
-                    epsilon=1e-5
-                    )
-                W_g = torch.bmm(compatabilities.transpose(2, 1), X_g_vectors)                                           # ([B,HW,K^2] -> [B,K^2,HW]) x [B,HW,C] -> [B,K^2,C]
-                X_l_flat_spatial = X_l[:,:,:,:self.spatial_C].reshape(-1, self.filter_size, self.spatial_C)             # [B,K^2,C]
-                forget_gate = torch.sigmoid(torch.sum(W_g * X_l_flat_spatial, dim=-1, keepdim=True))                    # [B,K^2,1]
-                output[:, i, j] = (forget_gate * X_l_flat_spatial).sum(dim=1)                                           # [B,K^2,1] x [B,K^2,C] -> [B,K^2,C] -> [B,C]
+        # output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()           # [B,F,F,C]
+        # TODO: Hack. Assumes Padding is 'same'
+        # pdb.set_trace()
+        output = torch.clone(self.undo_padding(batch.permute(0, 3, 1, 2))).permute(0, 2, 3, 1)
+        indices = self.indices
+        if 'random_k' in self.approach_args:
+            indices = np.random.permutation(indices)[:self.random_k]
+        for i, j in self.indices:
+        # for i in range(0, convs_height, self.stride):
+        #     for j in range(0, convs_width, self.stride):
+            X_l = X_normed[:, i:i+self.filter_K, j:j+self.filter_K]                                                 # [B,K,K,C]
+            raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', X_normed, X_l)                                   # [B,H,W,K,K]
+            raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
+            raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                             # [B,HW,K^2]
+            compatabilities = self.masked_softmax(
+                self.softmax_temp * raw_compatibilities,
+                global_mask[i, j].unsqueeze(0).unsqueeze(-1),
+                dim=1,
+                epsilon=1e-5
+                )
+            W_g = torch.bmm(compatabilities.transpose(2, 1), X_g_vectors)                                           # ([B,HW,K^2] -> [B,K^2,HW]) x [B,HW,C] -> [B,K^2,C]
+            X_l_flat_spatial = X_l[:,:,:,:self.spatial_C].reshape(-1, self.filter_size, self.spatial_C)             # [B,K^2,C]
+            forget_gate = torch.sigmoid(torch.sum(W_g * X_l_flat_spatial, dim=-1, keepdim=True))                    # [B,K^2,1]
+            output[:, i, j] = (forget_gate * X_l_flat_spatial).sum(dim=1)                                           # [B,K^2,1] x [B,K^2,C] -> [B,K^2,C] -> [B,C]
         return output
 
     def forward_on_approach4(self, batch):

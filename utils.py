@@ -32,6 +32,8 @@ def name_model(config):
         config['stride'],
         config['use_residual_connection']
     )
+    if 'random_k' in config:
+        model_name += '_k{}'.format(config['random_k'])
     return model_name
 
 def read_yaml(path):
