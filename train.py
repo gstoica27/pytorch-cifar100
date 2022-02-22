@@ -143,6 +143,7 @@ if __name__ == '__main__':
 
     # Redundant with convattn.yaml
     parser.add_argument('--approach_name', help='name of the approach: "1", "2", "3", "4". Look at csam.py for full documentation about each of the methods.')
+    parser.add_argument('--suffix', help='Suffix used to create the directory where the model weights/logs will be stored')
     parser.add_argument('--pos_emb_dim', help='Dimension of position embedding')
     parser.add_argument('--softmax_temp', help='Softmax Temperature')
     parser.add_argument('--injection_info', help='[[InjectionLayer, NumStack, FilterSize], [...]]')
@@ -167,6 +168,8 @@ if __name__ == '__main__':
     # Overwrite all file configs with the ones set inline
     if args.approach_name is not None:
         variant_config["approach_name"] = args.approach_name
+    if args.suffix is not None:
+        variant_config["suffix"] = args.suffix
     if args.pos_emb_dim is not None:
         variant_config["pos_emb_dim"] = int(args.pos_emb_dim)
     if args.softmax_temp is not None:
@@ -212,15 +215,15 @@ if __name__ == '__main__':
         if not recent_folder:
             raise Exception('no recent folder were found')
 
-        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder)
+        checkpoint_dir = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder)
 
     else:
-        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, settings.TIME_NOW)
+        checkpoint_dir = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, settings.TIME_NOW)
 
     with open('logs/started.txt', 'a') as f:
-        f.write(checkpoint_path)
+        f.write(checkpoint_dir)
         f.write("\n")
-    print('Saving to: {}'.format(checkpoint_path))
+    print('Saving to: {}'.format(checkpoint_dir))
 
     try:
 
@@ -238,35 +241,35 @@ if __name__ == '__main__':
         writer.add_graph(model, input_tensor)
 
         #create checkpoint folder to save model
-        if not os.path.exists(checkpoint_path):
-            os.makedirs(checkpoint_path)
-            print(checkpoint_path)
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir)
+            print(checkpoint_dir)
         save_yaml(
-            path=os.path.join(checkpoint_path, 'convattn.yaml'),
+            path=os.path.join(checkpoint_dir, 'convattn.yaml'),
             data=variant_config
         )
-        checkpoint_path = os.path.join(checkpoint_path, '{net}-{epoch}-{type}.pth')
+        checkpoint_path = os.path.join(checkpoint_dir, '{net}-{epoch}-{type}.pth')
 
         best_top1 = 0.0
         best_top5_at_top1 = 0.0
         best_epoch = 0
         if args.resume:
-            best_weights = best_acc_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder))
+            best_weights = best_acc_weights(checkpoint_dir)
             if best_weights:
-                weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder, best_weights)
+                weights_path = os.path.join(checkpoint_dir, best_weights)
                 print('found best acc weights file:{}'.format(weights_path))
                 print('load best training file to test acc...')
                 model.load_state_dict(torch.load(weights_path))
                 best_top1, best_top5 = eval_training(tb=False)
                 print('best top1 is {:0.2f} | best top5 is: {:0.2f}'.format(best_top1, best_top5))
 
-            recent_weights_file = most_recent_weights(os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder))
+            recent_weights_file = most_recent_weights(checkpoint_dir)
             if not recent_weights_file:
                 raise Exception('no recent weights file were found')
-            weights_path = os.path.join(settings.CHECKPOINT_PATH, args.net, model_name, variant_config["approach_name"], recent_folder, recent_weights_file)
+            weights_path = os.path.join(checkpoint_dir, recent_weights_file)
             print('loading weights file {} to resume training.....'.format(weights_path))
             model.load_state_dict(torch.load(weights_path))
-            resume_epoch = last_epoch(os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder))
+            resume_epoch = last_epoch(checkpoint_dir)
 
         for epoch in range(1, settings.EPOCH + 1):
             if epoch > args.warm:
@@ -305,7 +308,8 @@ if __name__ == '__main__':
 
         writer.close()
 
-    except :
+    except Exception as e:
+        print(e)
         with open('logs/latest_failed_checkpoint_paths.txt', 'a') as f:
             f.write(checkpoint_path)
             f.write("\n")
