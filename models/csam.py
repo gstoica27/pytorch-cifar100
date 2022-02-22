@@ -54,6 +54,7 @@ class ConvolutionalSelfAttention(nn.Module):
             '1': self.efficient_approach1,
             '2': self.efficient_approach2,
             '3': self.forward_on_approach3,
+            '3_unmasked': self.forward_on_approach3,
             '4': self.forward_on_approach4,
             '5': self.forward_on_approach5,
             '4_mem_efficient': self.forward_on_approach4_mem_efficient,
@@ -65,7 +66,7 @@ class ConvolutionalSelfAttention(nn.Module):
         }
 
         self.local_mask = self.compute_input_mask()
-        if self.approach_name in {'3', '4', '4_mem_efficient'}:
+        if self.approach_name in {'3', '3_unmasked', '4', '4_mem_efficient'}:
             new_shape = [self.num_convs, 1, self.spatial_H, self.spatial_W, 1]                                      # [Nc,1,H,W,1]
             self.local_mask = self.local_mask.reshape(*new_shape)
             self.padding_mask = self.padding_mask.reshape([1, 1, self.spatial_H, self.spatial_W, 1])
@@ -122,7 +123,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.global_transform = nn.Linear(self.X_encoding_dim, self.filter_K * self.filter_K)
         elif self.approach_name == '2':
             self.global_transform = nn.Linear(self.X_encoding_dim, 1)
-        elif self.approach_name == '3':
+        elif self.approach_name == '3' or self.approach_name == '3_unmasked':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
         elif self.approach_name == '4' or self.approach_name == '4_mem_efficient':
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
@@ -182,41 +183,42 @@ class ConvolutionalSelfAttention(nn.Module):
         return cell_lengths
 
     def compute_input_mask(self):
-        convs_height = self.spatial_H - self.filter_K + 1
-        convs_width = self.spatial_W - self.filter_K + 1
-        num_convs = convs_height * convs_width
+        unit_stride_convs_height = self.spatial_H - self.filter_K + 1
+        unit_stride_convs_width = self.spatial_W - self.filter_K + 1
 
-        strided_convs_height = int(convs_height // self.stride)
-        strided_convs_width = int(convs_width // self.stride)
-        num_strided_convs = int(strided_convs_height * strided_convs_width)
+        self.convs_height = int(unit_stride_convs_height // self.stride)
+        self.convs_width = int(unit_stride_convs_width // self.stride)
+        self.num_convs = self.convs_height * self.convs_width
 
-        cell_heights = self.compute_cell_lengths(strided_convs_height, convs_height)
-        cell_widths = self.compute_cell_lengths(strided_convs_width, convs_width)
+        cell_heights = self.compute_cell_lengths(self.convs_height, unit_stride_convs_height)
+        cell_widths = self.compute_cell_lengths(self.convs_width, unit_stride_convs_width)
 
         cell_row_starts = torch.cumsum(torch.cat((torch.zeros(1, dtype=torch.int), cell_heights[:-1])), dim=0)
         cell_col_starts = torch.cumsum(torch.cat((torch.zeros(1, dtype=torch.int), cell_widths[:-1])), dim=0)
 
         input_mask = torch.zeros(
             (
-                num_strided_convs,
+                self.num_convs,
                 self.spatial_H,
                 self.spatial_W,
             ),
             dtype=torch.float32)
 
-        self.local_indices = torch.zeros((num_strided_convs, self.filter_K * self.filter_K))
+        self.local_indices = torch.zeros((self.num_convs, self.filter_K * self.filter_K))
+
+        if self.approach_name == '3_unmasked':
+            return input_mask
+
         conv_idx = 0
         for i_idx, i in enumerate(cell_row_starts):
             for j_idx, j in enumerate(cell_col_starts):
                 offset_i = i + (random.randrange(cell_heights[i_idx]) if self.apply_stochastic_stride else 0)
                 offset_j = j + (random.randrange(cell_widths[j_idx]) if self.apply_stochastic_stride else 0)
+
                 input_mask[conv_idx, offset_i:offset_i+self.filter_K, offset_j:offset_j+self.filter_K] = 1.
                 self.local_indices[conv_idx] = input_mask[conv_idx].reshape(-1).nonzero().sort()[0].reshape(-1)
                 input_mask[conv_idx] = F.relu(input_mask[conv_idx] - self.padding_mask)
                 conv_idx += 1
-        self.num_convs = strided_convs_height * strided_convs_width
-        self.convs_height = strided_convs_height
-        self.convs_width = strided_convs_width
         return input_mask.flatten(1)                                                                                    # [Nc, HW]
 
     def split_input(self, batch, mask_X_g=True):
@@ -310,7 +312,6 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                                               # [B,Nc,C] -> [B,F,F,C]
 
     def forward_on_approach3(self, batch):
-
         global_mask = (1 - self.padding_mask - self.local_mask).flatten(
             start_dim=1, end_dim=-1).reshape(
                 self.convs_height, self.convs_width, -1)                                                                # [Nc,1,H,W,1]
@@ -329,7 +330,6 @@ class ConvolutionalSelfAttention(nn.Module):
             for j in range(0, convs_width, self.stride):
                 X_l = X_normed[:, i:i+self.filter_K, j:j+self.filter_K]                                                 # [B,K,K,C]
                 raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', X_normed, X_l)                                   # [B,H,W,K,K]
-                raw_compatibilities[:, i:i+self.filter_K, j:j+self.filter_K, :, :] = 0
                 raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                             # [B,HW,K^2]
                 compatabilities = self.masked_softmax(
                     self.softmax_temp * raw_compatibilities,
