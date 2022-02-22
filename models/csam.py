@@ -445,12 +445,13 @@ class ConvolutionalSelfAttention(nn.Module):
         return context.reshape(-1, self.input_H, self.input_W, self.spatial_C)                                          # [B,HW,C] -> [B,H,W,C]
 
     def forward_on_local_window_self_attention(self, batch, include_Xl_in_Xg=False):
-        global_mask = (1 - self.padding_mask.reshape(1, -1))                                                            # [Nc,HW]
+        global_mask = (1 - self.padding_mask.reshape(1, -1))                                                            # [1,HW]
         if not include_Xl_in_Xg:
-            global_mask = global_mask - self.local_mask
+            global_mask = global_mask - self.local_mask                                                                 # [Nc,HW]
 
         batch_pos = self.maybe_add_positional_encodings(batch)
-        scaled_batch = (batch_pos * self.elem_scales).flatten(1, 2)                                                     # [B,H,W,C] x [B,H,W,C] -> [B,HW,C]
+        # scaled_batch = (batch_pos * self.elem_scales).flatten(1, 2)                                                   # [B,H,W,C] x [B,H,W,C] -> [B,HW,C]
+        scaled_batch = (batch_pos).flatten(1, 2)                                                                        # [B,H,W,C] -> [B,HW,C]
 
         scaled_local = torch.matmul(scaled_batch.permute(0, 2, 1), self.local_mask.transpose(1,0)).permute(0, 2, 1)     # ([B,HW,C] -> [B,C,HW]) x ([Nc,HW] -> [HW,Nc]) -> [B,C,Nc] -> [B,Nc,C]
 
@@ -458,8 +459,8 @@ class ConvolutionalSelfAttention(nn.Module):
         global_values = self.value_transform(batch_pos).flatten(1, 2)                                                    # [B,HW,C]
         global_keys = self.key_transform(batch_pos).flatten(1, 2)                                                        # [B,HW,C]
 
-        local_queries = F.normalize(local_queries, dim=-1)
-        global_keys = F.normalize(global_keys, dim=-1)
+        # local_queries = F.normalize(local_queries, dim=-1)
+        # global_keys = F.normalize(global_keys, dim=-1)
         score = torch.bmm(local_queries, global_keys.transpose(1, 2)) / math.sqrt(local_queries.shape[-1])              # [B,Nc,C] x ([B,HW,C] -> [B,C,HW]) -> [B,Nc,HW]
         attn = self.masked_softmax(vec=score, mask=global_mask.unsqueeze(0), dim=-1)                                    # [B,Nc,HW]
         convolution = torch.bmm(attn, global_values)                                                                    # [B,Nc,HW] x [B,HW,C] -> [B,Nc,C]
