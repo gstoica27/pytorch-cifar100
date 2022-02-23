@@ -459,8 +459,8 @@ class ConvolutionalSelfAttention(nn.Module):
         global_values = self.value_transform(batch_pos).flatten(1, 2)                                                    # [B,HW,C]
         global_keys = self.key_transform(batch_pos).flatten(1, 2)                                                        # [B,HW,C]
 
-        # local_queries = F.normalize(local_queries, dim=-1)
-        # global_keys = F.normalize(global_keys, dim=-1)
+        local_queries = F.normalize(local_queries, dim=-1)
+        global_keys = F.normalize(global_keys, dim=-1)
         score = torch.bmm(local_queries, global_keys.transpose(1, 2)) / math.sqrt(local_queries.shape[-1])              # [B,Nc,C] x ([B,HW,C] -> [B,C,HW]) -> [B,Nc,HW]
         attn = self.masked_softmax(vec=score, mask=global_mask.unsqueeze(0), dim=-1)                                    # [B,Nc,HW]
         convolution = torch.bmm(attn, global_values)                                                                    # [B,Nc,HW] x [B,HW,C] -> [B,Nc,C]
