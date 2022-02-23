@@ -336,9 +336,9 @@ class ConvolutionalSelfAttention(nn.Module):
         # pdb.set_trace()
         output = torch.clone(self.undo_padding(batch.permute(0, 3, 1, 2))).permute(0, 2, 3, 1)
         indices = self.indices
-        if 'random_k' in self.approach_args:
+        if 'random_k' in self.approach_args and self.random_k > 0:
             indices = np.random.permutation(indices)[:self.random_k]
-        for i, j in self.indices:
+        for i, j in indices:
         # for i in range(0, convs_height, self.stride):
         #     for j in range(0, convs_width, self.stride):
 
