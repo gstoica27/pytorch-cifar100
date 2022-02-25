@@ -55,6 +55,7 @@ class ConvolutionalSelfAttention(nn.Module):
             '1': self.efficient_approach1,
             '2': self.efficient_approach2,
             '3': self.forward_on_approach3,
+            '3_kq': self.forward_on_approach3,
             '3_unmasked': self.forward_on_approach3,
             '4': self.forward_on_approach4,
             '5': self.forward_on_approach5,
@@ -69,7 +70,7 @@ class ConvolutionalSelfAttention(nn.Module):
         }
 
         self.local_mask = self.compute_input_mask()
-        if self.approach_name in {'3', '3_unmasked', '4', '4_mem_efficient'}:
+        if self.approach_name in {'3', '3_kq', '3_unmasked', '4', '4_mem_efficient'}:
             new_shape = [self.num_convs, 1, self.spatial_H, self.spatial_W, 1]                                      # [Nc,1,H,W,1]
             self.local_mask = self.local_mask.reshape(*new_shape)
             self.padding_mask = self.padding_mask.reshape([1, 1, self.spatial_H, self.spatial_W, 1])
@@ -126,11 +127,14 @@ class ConvolutionalSelfAttention(nn.Module):
             self.global_transform = nn.Linear(self.X_encoding_dim, self.filter_K * self.filter_K)
         elif self.approach_name == '2':
             self.global_transform = nn.Linear(self.X_encoding_dim, 1)
-        elif self.approach_name == '3' or self.approach_name == '3_unmasked':
+        elif self.approach_name == '3' or self.approach_name == '3_kq' or self.approach_name == '3_unmasked':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.indices = np.array([(i, j) for i in range(self.convs_height) for j in range(self.convs_width)])
             if 'random_k' in self.approach_args:
                 self.random_k = self.approach_args['random_k']
+            if self.approach_name == '3_kq':
+                self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+                self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
         elif self.approach_name == '4' or self.approach_name == '4_mem_efficient':
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
@@ -331,6 +335,12 @@ class ConvolutionalSelfAttention(nn.Module):
         # For cosine similarity
         X_normed = torch.nn.functional.normalize(X, dim=-1)
 
+        keys = X_normed
+        queries = X_normed
+        if self.approach_name == '3_kq':
+            keys = self.key_transform(X_normed)
+            queries = self.query_transform(X_normed)
+
         # output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()           # [B,F,F,C]
         # TODO: Hack. Assumes Padding is 'same'
         # pdb.set_trace()
@@ -342,9 +352,9 @@ class ConvolutionalSelfAttention(nn.Module):
         # for i in range(0, convs_height, self.stride):
         #     for j in range(0, convs_width, self.stride):
 
-                X_l = X_normed[:, i:i+self.filter_K, j:j+self.filter_K]                                                 # [B,K,K,C]
-                raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', X_normed, X_l)                                   # [B,H,W,K,K]
-                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                             # [B,HW,K^2]
+                X_l = queries[:, i:i+self.filter_K, j:j+self.filter_K]                                                 # [B,K,K,C]
+                raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', keys, X_l)                                      # [B,H,W,K,K]
+                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                            # [B,HW,K^2]
                 compatabilities = self.masked_softmax(
                     self.softmax_temp * raw_compatibilities,
                     global_mask[i, j].unsqueeze(0).unsqueeze(-1),
