@@ -293,6 +293,9 @@ def most_recent_folder(net_weights, fmt):
         return most recent created folder under net_weights
         if no none-empty folder were found, return empty folder
     """
+    if not os.path.exists(net_weights):
+        return ''
+
     # get subfolders in net_weights
     folders = os.listdir(net_weights)
 

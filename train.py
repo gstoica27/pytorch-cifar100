@@ -222,11 +222,11 @@ if __name__ == '__main__':
     if args.resume:
         recent_folder = most_recent_folder(os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name), fmt=settings.DATE_FORMAT)
         if not recent_folder:
-            raise Exception('no recent folder were found')
-
-        checkpoint_dir = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder)
-
-    else:
+            print('no recent folders were found')
+            args.resume = False
+        else:
+            checkpoint_dir = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, recent_folder)
+    if not args.resume:
         checkpoint_dir = os.path.join(settings.CHECKPOINT_PATH, args.net, variant_config["approach_name"], model_name, settings.TIME_NOW)
 
     with open('logs/started.txt', 'a') as f:
