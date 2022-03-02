@@ -40,8 +40,12 @@ class ConvolutionalSelfAttention(nn.Module):
         self.input_padder = self.compute_padding(self.padding_type)
         self.spatial_H = int(self.input_H + 2 * self.padding_tuple[2])
         self.spatial_W = int(self.input_W + 2 * self.padding_tuple[0])
-
-        self.pos_emb_dim = self.spatial_C if 'self_attention' in self.approach_name else self.approach_args.get('pos_emb_dim', 0)
+        
+        if 'self_attention' in self.approach_name or self.approach_args.get('pos_emb_dim', 0) < 0:
+            self.pos_emb_dim = self.spatial_C
+        else:
+            self.pos_emb_dim = self.approach_args.get('pos_emb_dim', 0)
+        # self.pos_emb_dim = self.spatial_C if 'self_attention' in self.approach_name else self.approach_args.get('pos_emb_dim', 0)
 
         h_convs, w_convs = self.get_num_convs()
         output_shrunk = h_convs < self.input_H or w_convs < self.input_W
@@ -125,12 +129,14 @@ class ConvolutionalSelfAttention(nn.Module):
         self.X_encoding_dim = self.spatial_C                                                                            # Call this E
         # Account for positional encodings
         self.maybe_create_positional_encodings()
-        if self.pos_emb_dim > 0:
+        if 'self_attention' not in self.approach_name and self.approach_args.get('pos_emb_dim', 0) > 0:
             self.X_encoding_dim += self.pos_emb_dim
         if self.approach_name == '1':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.filter_K * self.filter_K)
         elif self.approach_name == '2':
             self.global_transform = nn.Linear(self.X_encoding_dim, 1)
+            self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+            self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
         elif self.approach_name == '3' or self.approach_name == '3_kq' or self.approach_name == '3_unmasked':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.indices = np.array([(i, j) for i in range(self.convs_height) for j in range(self.convs_width)])
@@ -306,7 +312,7 @@ class ConvolutionalSelfAttention(nn.Module):
             positional_encodings = self.positional_encodings(
                 batch[:, :, :, :self.pos_emb_dim]                                                                       # [B,H,W,P]
             )
-            if 'self_attention' in self.approach_name:
+            if 'self_attention' in self.approach_name or self.approach_args.get('pos_emb_dim', 0) < 0:
                 return batch + positional_encodings
             return torch.cat((batch, positional_encodings), dim=-1)                                                     # [[B,H,W,C];[B,H,W,P]] -> [B,H,W,C+P]
         return batch
@@ -316,20 +322,25 @@ class ConvolutionalSelfAttention(nn.Module):
         batch_pos = self.maybe_add_positional_encodings(batch)
         global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                                          # [Nc,HW]
         batch_flat = batch_pos.flatten(1, 2)                                                                            # [B,H,W,C] -> [B,HW,C]
+        keys = self.key_transform(batch_flat)
+        queries = self.query_transform(batch_flat)
         gX = self.global_transform(batch_flat)                                                                          # [B,HW,C] -> [B,HW,1]
-        cos_sim = self.cosine_similarity(batch_flat, batch_flat)                                                        # [B,HW,C]x[B,HW,C] -> [B,HW,HW]
-        exp_sim = torch.exp(cos_sim - cos_sim.mean(dim=-1, keepdim=True)[0])                                            # [B,HW,HW]
-        exp_sum = torch.einsum('ijk,kl->ijl', exp_sim, global_mask.transpose(1, 0))                                     # [B,HW,HW]x[HW,Nc] -> [B,HW,Nc]
-        inverted_sum = 1. / exp_sum                                                                                     # [B,HW,Nc]
+        # score = self.cosine_similarity(batch_flat, batch_flat)                                                        # [B,HW,C]x[B,HW,C] -> [B,HW,HW]
+        score = torch.bmm(queries, keys.transpose(1, 2)) / math.sqrt(queries.shape[-1])                                 # [B,HW,C] x [B,C,HW] -> [B,HW,HW]
+        exp_sim = torch.exp(score - score.max(dim=-1, keepdim=True)[0])                                                 # [B,HW,HW]
+        exp_sum = torch.matmul(exp_sim, global_mask.transpose(1, 0))                                                    # [B,HW,HW]x[HW,Nc] -> [B,HW,Nc]
+        # exp_sum = torch.einsum('ijk,kl->ijl', exp_sim, global_mask.transpose(1, 0))                                     # [B,HW,HW]x[HW,Nc] -> [B,HW,Nc]
+        inverted_sum = 1. / (exp_sum + 6.1e-5)                                                                                      # [B,HW,Nc]
         masked_denominator = inverted_sum * self.local_mask.transpose(1,0).unsqueeze(0)                                 # [B,HW,Nc]x([Nc,Hw] -> [HW,Nc] -> [1,HW,Nc]) -> [B,HW,Nc]
         g_sim = gX.transpose(2, 1) * exp_sim                                                                            # ([B,HW,1] -> [B,1,HW])x[B,HW,HW] -> [B,HW,HW]
-        g_sum = torch.einsum('ijk,kl->ijl', g_sim, global_mask.transpose(1, 0))                                         # [B,HW,HW]x([B,Nc,HW] -> [B,HW,Nc]) -> [B,HW,Nc]
-        extended_filter = g_sum * masked_denominator                                                                    # [B,HW,Nc]
+        g_sum = torch.matmul(g_sim, global_mask.transpose(1, 0))                                                        # [B,HW,HW]x([B,Nc,HW] -> [B,HW,Nc]) -> [B,HW,Nc]
+        # g_sum = torch.einsum('ijk,kl->ijl', g_sim, global_mask.transpose(1, 0))                                         # [B,HW,HW]x([B,Nc,HW] -> [B,HW,Nc]) -> [B,HW,Nc]
+        extended_filter = F.sigmoid(g_sum * masked_denominator)                                                         # [B,HW,Nc]
         result = torch.bmm(batch_flat.transpose(2, 1), extended_filter).transpose(2, 1)                                 # ([B,HW,C] -> [B,C,HW])x[B,HW,Nc] -> [B,C,Nc] -> [B,Nc,C]
 
-        return result[:,:,:self.spatial_C].reshape(
+        return result[:, :, :self.spatial_C].reshape(
             -1, self.convs_height, self.convs_width, self.spatial_C
-        )                                                                                                               # [B,Nc,C] -> [B,F,F,C]
+        )                                                                                                                # [B,Nc,C] -> [B,F,F,C]
 
     def approach3(self, batch):
         global_mask = (1 - self.padding_mask - self.local_mask).flatten(
@@ -347,9 +358,11 @@ class ConvolutionalSelfAttention(nn.Module):
 
         keys = X_normed
         queries = X_normed
+        denom = 1.
         if self.approach_name == '3_kq':
-            keys = self.key_transform(X_normed)
-            queries = self.query_transform(X_normed)
+            keys = self.key_transform(X)
+            queries = self.query_transform(X)
+            denom = math.sqrt(queries.shape[-1])
 
         # output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()           # [B,F,F,C]
         # TODO: Hack. Assumes Padding is 'same'
@@ -362,7 +375,7 @@ class ConvolutionalSelfAttention(nn.Module):
         # for i in range(0, convs_height, self.stride):
         #     for j in range(0, convs_width, self.stride):
 
-                X_l = queries[:, i:i+self.filter_K, j:j+self.filter_K]                                                 # [B,K,K,C]
+                X_l = queries[:, i:i+self.filter_K, j:j+self.filter_K] / denom                                         # [B,K,K,C]
                 raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', keys, X_l)                                      # [B,H,W,K,K]
                 raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                            # [B,HW,K^2]
                 compatabilities = self.masked_softmax(
