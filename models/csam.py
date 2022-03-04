@@ -60,7 +60,7 @@ class ConvolutionalSelfAttention(nn.Module):
             '2': self.efficient_approach2,
             '3': self.approach3,
             '3_kq': self.approach3,
-            '3_unmasked': self.approach3,
+            '3_unmasked': self.approach3_v2,
             '4': self.approach4,
             '5': self.approach5,
             '4_mem_efficient': self.approach4_mem_efficient,
@@ -318,7 +318,7 @@ class ConvolutionalSelfAttention(nn.Module):
         return batch
 
     def efficient_approach2(self, batch):
-
+        
         batch_pos = self.maybe_add_positional_encodings(batch)
         global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                                          # [Nc,HW]
         batch_flat = batch_pos.flatten(1, 2)                                                                            # [B,H,W,C] -> [B,HW,C]
@@ -342,6 +342,28 @@ class ConvolutionalSelfAttention(nn.Module):
             -1, self.convs_height, self.convs_width, self.spatial_C
         )                                                                                                                # [B,Nc,C] -> [B,F,F,C]
 
+    def approach3_v2(self, batch):
+        local_mask = self.local_mask.flatten(1).transpose(1, 0)
+        valid_elements = (1 - self.padding_mask).flatten(2, 4)
+        X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
+        batch_size, H, W, _ = X.shape
+        X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
+        values = self.global_transform(X)                                                                               # [B,HW,C]
+        X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
+        scores = torch.bmm(X_normed, X_normed.transpose(2, 1))                                                          # [B,HW,HW]
+        attn = self.masked_softmax(                                                                                     # [B,HW,HW]
+            scores, 
+            mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
+            dim=-1, epsilon=1e-5 
+        )                                                                                                               # [B,HW,HW]
+        filter_vecs = torch.bmm(attn, values)                                                                           # [B,HW,C]
+        filter_vals = (filter_vecs * X).sum(-1, keepdim=True)                                                           # [B,HW,C] x [B,HW,C] -> [B,HW,1]
+        weighted_X = F.sigmoid(filter_vals) * X                                                                         # [B,HW,C] x [B,HW,1] -> [B,HW,C]
+        output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                   # [B,C,HW] x [HW,Nc] -> [B,C,Nc]
+        return output.reshape(
+            batch_size, self.convs_height, self.convs_width, self.spatial_C
+        )
+        
     def approach3(self, batch):
         global_mask = (1 - self.padding_mask - self.local_mask).flatten(
             start_dim=1, end_dim=-1).reshape(
