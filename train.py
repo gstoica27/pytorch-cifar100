@@ -152,6 +152,7 @@ if __name__ == '__main__':
     parser.add_argument('--stride', help='Size of the stride')
     parser.add_argument('--apply_stochastic_stride', action='store_true', default=None, help='Apply stochastic stride')
     parser.add_argument('--use_residual_connection', action='store_true', default=None, help='Use residual connection')
+    parser.add_argument('--forget_gate_nonlinearity', help='Only used in approach 3. Nonlinearlity to apply for the "forget gate"')
     parser.add_argument('--seed', default=17, type=int)
 
     parser.add_argument(
@@ -191,6 +192,8 @@ if __name__ == '__main__':
         variant_config["apply_stochastic_stride"] = args.apply_stochastic_stride
     if args.use_residual_connection is not None:
         variant_config["use_residual_connection"] = args.use_residual_connection
+    if args.forget_gate_nonlinearity is not None:
+        variant_config["forget_gate_nonlinearity"] = args.forget_gate_nonlinearity
 
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 

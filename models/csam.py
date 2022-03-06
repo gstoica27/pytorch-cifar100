@@ -145,6 +145,10 @@ class ConvolutionalSelfAttention(nn.Module):
             if self.approach_name == '3_kq':
                 self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
                 self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+            if self.approach_args['forget_gate_nonlinearity'] == 'sigmoid':
+                self.forget_gate_nonlinearity = nn.Sigmoid()
+            elif self.approach_args['forget_gate_nonlinearity'] == 'softmax':
+                self.forget_gate_nonlinearity = nn.Softmax(dim=1)
         elif self.approach_name == '4' or self.approach_name == '4_mem_efficient':
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
@@ -358,7 +362,7 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                                               # [B,HW,HW]
         filter_vecs = torch.bmm(attn, values)                                                                           # [B,HW,C]
         filter_vals = (filter_vecs * X).sum(-1, keepdim=True)                                                           # [B,HW,C] x [B,HW,C] -> [B,HW,1]
-        weighted_X = F.sigmoid(filter_vals) * X                                                                         # [B,HW,C] x [B,HW,1] -> [B,HW,C]
+        weighted_X = self.forget_gate_nonlinearity(filter_vals) * X                                                     # [B,HW,C] x [B,HW,1] -> [B,HW,C]
         output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                   # [B,C,HW] x [HW,Nc] -> [B,C,Nc]
         return output.reshape(
             batch_size, self.convs_height, self.convs_width, self.spatial_C
@@ -408,7 +412,7 @@ class ConvolutionalSelfAttention(nn.Module):
                     )
                 W_g = torch.bmm(compatabilities.transpose(2, 1), X_g_vectors)                                           # ([B,HW,K^2] -> [B,K^2,HW]) x [B,HW,C] -> [B,K^2,C]
                 X_l_flat_spatial = X_l[:,:,:,:self.spatial_C].reshape(-1, self.filter_size, self.spatial_C)             # [B,K^2,C]
-                forget_gate = torch.sigmoid(torch.sum(W_g * X_l_flat_spatial, dim=-1, keepdim=True))                    # [B,K^2,1]
+                forget_gate = self.forget_gate_nonlinearity(torch.sum(W_g * X_l_flat_spatial, dim=-1, keepdim=True))    # [B,K^2,1]
                 output[:, i, j] = (forget_gate * X_l_flat_spatial).sum(dim=1)                                           # [B,K^2,1] x [B,K^2,C] -> [B,K^2,C] -> [B,C]
 
         return output
