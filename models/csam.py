@@ -395,15 +395,18 @@ class ConvolutionalSelfAttention(nn.Module):
         )
         
     def approach3(self, batch):
-        local_mask = torch.zeros(
-            (
-                self.num_convs,
-                self.spatial_H,
-                self.spatial_W,
-            ),
-            dtype=torch.float32).cuda().reshape(
-                self.num_convs, 1, self.spatial_H, self.spatial_W, 1
-            )
+        if self.approach_name == '3_unmasked':
+            local_mask = torch.zeros(
+                (
+                    self.num_convs,
+                    self.spatial_H,
+                    self.spatial_W,
+                ),
+                dtype=torch.float32).cuda().reshape(
+                    self.num_convs, 1, self.spatial_H, self.spatial_W, 1
+                )
+        else:
+            local_mask = self.local_mask
         global_mask = (1 - self.padding_mask - local_mask).flatten(
             start_dim=1, end_dim=-1).reshape(
                 self.convs_height, self.convs_width, -1)                                                                # [Nc,1,H,W,1]
