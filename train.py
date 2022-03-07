@@ -238,7 +238,7 @@ if __name__ == '__main__':
     print('Saving to: {}'.format(checkpoint_dir))
 
     try:
-
+        checkpoint_path = os.path.join(checkpoint_dir, '{net}-{epoch}-{type}.pth')
         #use tensorboard
         if not os.path.exists(settings.LOG_DIR):
             os.mkdir(settings.LOG_DIR)
@@ -260,7 +260,7 @@ if __name__ == '__main__':
             path=os.path.join(checkpoint_dir, 'convattn.yaml'),
             data=variant_config
         )
-        checkpoint_path = os.path.join(checkpoint_dir, '{net}-{epoch}-{type}.pth')
+        
 
         best_top1 = 0.0
         best_top5_at_top1 = 0.0

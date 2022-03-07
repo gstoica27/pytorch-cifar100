@@ -236,8 +236,8 @@ class ConvolutionalSelfAttention(nn.Module):
 
         self.local_indices = torch.zeros((self.num_convs, self.filter_K * self.filter_K))
 
-        if self.approach_name == '3_unmasked':
-            return input_mask
+        # if self.approach_name == '3_unmasked':
+        #     return input_mask
 
         conv_idx = 0
         for i_idx, i in enumerate(cell_row_starts):
@@ -322,24 +322,50 @@ class ConvolutionalSelfAttention(nn.Module):
         return batch
 
     def efficient_approach2(self, batch):
-        
+        # Add positional Encodings
         batch_pos = self.maybe_add_positional_encodings(batch)
+        # Get global mask
         global_mask = (1 - self.padding_mask.reshape(1, -1)) - self.local_mask                                          # [Nc,HW]
         batch_flat = batch_pos.flatten(1, 2)                                                                            # [B,H,W,C] -> [B,HW,C]
-        keys = self.key_transform(batch_flat)
-        queries = self.query_transform(batch_flat)
-        gX = self.global_transform(batch_flat)                                                                          # [B,HW,C] -> [B,HW,1]
+        keys = self.key_transform(batch_flat)                                                                           # [B,HW,C]
+        queries = self.query_transform(batch_flat)                                                                      # [B,HW,C]
+        values = self.global_transform(batch_flat)                                                                      # [B,HW,C] -> [B,HW,1]
         # score = self.cosine_similarity(batch_flat, batch_flat)                                                        # [B,HW,C]x[B,HW,C] -> [B,HW,HW]
         score = torch.bmm(queries, keys.transpose(1, 2)) / math.sqrt(queries.shape[-1])                                 # [B,HW,C] x [B,C,HW] -> [B,HW,HW]
+        
+        """
+        ------------------------------------------------ Explanation ------------------------------------------------
+        |       The next several lines compute a memory efficient masked-softmax using our                          |
+        |       local and global masks in special ways. We will try to explain what is                              |
+        |       happening in the context of the sotmax equation applied in this approach:                           |
+        |       z = Σ_i^{HW-K^2} V_i \frac{ e^{ matmul(Q, [K.T]_i) } }{ Σ_j^{HW-K^2} e^{ matmul(Q, [K.T]_j) } }     |
+        |         = Σ_i^{HW-K^2} \frac{ V_i x e^{ matmul(Q, [K.T]_i) } }{ Σ_j^{HW-K^2} e^{ matmul(Q, [K.T]_j) } }   |
+        |         = \frac{ Σ_i^{HW-K^2} V_i x e^{ matmul(Q, [K.T]_i) } }{ Σ_j^{HW-K^2} e^{ matmul(Q, [K.T]_j) } }   |
+        |       F = sigmoid(z)                                                                                      |
+        |       Where V_i is a scalar, Q is R^{K^2 x C}, V.T is R^{C x (HW-K^2)}, softmax is R^{K^2 x (HW-K^2)},    |
+        |       Z is R^{K^2 x 1}                                                                                    |
+        -------------------------------------------------------------------------------------------------------------
+        """
+
+        # Subtract maximum for softmax stability & compute softmax numerator: e^{ matmul(Q, [K.T]) }
+        # Note however that the computed tensor is R^{HW x HW} rather than R^{K^2 x (HW - K^2)} 
+        # as in the above master equation. We take care of this in line 357.
         exp_sim = torch.exp(score - score.max(dim=-1, keepdim=True)[0])                                                 # [B,HW,HW]
+        # This computes the softmax denominator: Σ_j^{HW-K^2} e^{ matmul(Q, [K.T]_j) }. 
+        # However, it does this for each element in HW, rather than just K^2. We address this in line 357
         exp_sum = torch.matmul(exp_sim, global_mask.transpose(1, 0))                                                    # [B,HW,HW]x[HW,Nc] -> [B,HW,Nc]
-        # exp_sum = torch.einsum('ijk,kl->ijl', exp_sim, global_mask.transpose(1, 0))                                     # [B,HW,HW]x[HW,Nc] -> [B,HW,Nc]
+        # Invert denominator to obtain \frac{1}{ Σ_j^{HW-K^2} e^{ matmul(Q, [K.T]_j) } } 
+        # & add epsilon for numerical stability
         inverted_sum = 1. / (exp_sum + 6.1e-5)                                                                                      # [B,HW,Nc]
+        # Softly transform denominator from all HW to just K^2 by masking out all sums not in X_l 
         masked_denominator = inverted_sum * self.local_mask.transpose(1,0).unsqueeze(0)                                 # [B,HW,Nc]x([Nc,Hw] -> [HW,Nc] -> [1,HW,Nc]) -> [B,HW,Nc]
-        g_sim = gX.transpose(2, 1) * exp_sim                                                                            # ([B,HW,1] -> [B,1,HW])x[B,HW,HW] -> [B,HW,HW]
+        # Compute numerator x value: V_i x e^{ matmul(Q, [K.T]_i) }
+        g_sim = values.transpose(2, 1) * exp_sim                                                                        # ([B,HW,1] -> [B,1,HW])x[B,HW,HW] -> [B,HW,HW]
+        # Compute numerator sum: Σ_i^{HW-K^2} V_i x e^{ matmul(Q, [K.T]_i) }
         g_sum = torch.matmul(g_sim, global_mask.transpose(1, 0))                                                        # [B,HW,HW]x([B,Nc,HW] -> [B,HW,Nc]) -> [B,HW,Nc]
-        # g_sum = torch.einsum('ijk,kl->ijl', g_sim, global_mask.transpose(1, 0))                                         # [B,HW,HW]x([B,Nc,HW] -> [B,HW,Nc]) -> [B,HW,Nc]
+        # g_sum x masked_denominator gives us z (line 339), sigmoid gives us F (line 340)
         extended_filter = F.sigmoid(g_sum * masked_denominator)                                                         # [B,HW,Nc]
+        # Apply filter on X_l. Note that our F is only non-zero for elements corresponding to those in X_l
         result = torch.bmm(batch_flat.transpose(2, 1), extended_filter).transpose(2, 1)                                 # ([B,HW,C] -> [B,C,HW])x[B,HW,Nc] -> [B,C,Nc] -> [B,Nc,C]
 
         return result[:, :, :self.spatial_C].reshape(
@@ -369,7 +395,16 @@ class ConvolutionalSelfAttention(nn.Module):
         )
         
     def approach3(self, batch):
-        global_mask = (1 - self.padding_mask - self.local_mask).flatten(
+        local_mask = torch.zeros(
+            (
+                self.num_convs,
+                self.spatial_H,
+                self.spatial_W,
+            ),
+            dtype=torch.float32).cuda().reshape(
+                self.num_convs, 1, self.spatial_H, self.spatial_W, 1
+            )
+        global_mask = (1 - self.padding_mask - local_mask).flatten(
             start_dim=1, end_dim=-1).reshape(
                 self.convs_height, self.convs_width, -1)                                                                # [Nc,1,H,W,1]
         X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
@@ -401,9 +436,13 @@ class ConvolutionalSelfAttention(nn.Module):
         # for i in range(0, convs_height, self.stride):
         #     for j in range(0, convs_width, self.stride):
 
-                X_l = queries[:, i:i+self.filter_K, j:j+self.filter_K] / denom                                         # [B,K,K,C]
-                raw_compatibilities = torch.einsum('bhwc,bkjc->bhwkj', keys, X_l)                                      # [B,H,W,K,K]
-                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                            # [B,HW,K^2]
+                X_l = X[:, i:i+self.filter_K, j:j+self.filter_K] / denom                                                # [B,K,K,C]
+                raw_compatibilities = torch.einsum(
+                    'bhwc,bkjc->bhwkj', 
+                    keys, 
+                    queries[:, i:i+self.filter_K, j:j+self.filter_K] / denom
+                )                                                                                                       # [B,H,W,K,K]
+                raw_compatibilities = raw_compatibilities.view(-1, H * W, self.filter_size)                             # [B,HW,K^2]
                 compatabilities = self.masked_softmax(
                     self.softmax_temp * raw_compatibilities,
                     global_mask[i, j].unsqueeze(0).unsqueeze(-1),
@@ -414,7 +453,6 @@ class ConvolutionalSelfAttention(nn.Module):
                 X_l_flat_spatial = X_l[:,:,:,:self.spatial_C].reshape(-1, self.filter_size, self.spatial_C)             # [B,K^2,C]
                 forget_gate = self.forget_gate_nonlinearity(torch.sum(W_g * X_l_flat_spatial, dim=-1, keepdim=True))    # [B,K^2,1]
                 output[:, i, j] = (forget_gate * X_l_flat_spatial).sum(dim=1)                                           # [B,K^2,1] x [B,K^2,C] -> [B,K^2,C] -> [B,C]
-
         return output
 
     def approach4(self, batch):
