@@ -61,6 +61,8 @@ class ConvolutionalSelfAttention(nn.Module):
             '3': self.approach3,
             '3_kq': self.approach3,
             '3_unmasked': self.approach3_v2,
+            '3_unmasked_cls': self.approach3_v2_cls,
+            '3_unmasked_cls_proj': self.approach3_v2_cls_proj,
             '4': self.approach4,
             '5': self.approach5,
             '4_mem_efficient': self.approach4_mem_efficient,
@@ -77,7 +79,10 @@ class ConvolutionalSelfAttention(nn.Module):
         }
 
         self.local_mask = self.compute_input_mask()
-        if self.approach_name in {'3', '3_kq', '3_unmasked', '4', '4_mem_efficient'}:
+        if self.approach_name in {
+            '3', '3_kq', '3_unmasked', '4', '4_mem_efficient', 
+            '3_unmasked_cls', '3_unmasked_cls_proj'
+        }:
             new_shape = [self.num_convs, 1, self.spatial_H, self.spatial_W, 1]                                      # [Nc,1,H,W,1]
             self.local_mask = self.local_mask.reshape(*new_shape)
             self.padding_mask = self.padding_mask.reshape([1, 1, self.spatial_H, self.spatial_W, 1])
@@ -137,7 +142,8 @@ class ConvolutionalSelfAttention(nn.Module):
             self.global_transform = nn.Linear(self.X_encoding_dim, 1)
             self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
-        elif self.approach_name == '3' or self.approach_name == '3_kq' or self.approach_name == '3_unmasked':
+        elif self.approach_name in {'3', '3_kq', '3_unmasked', '3_unmasked_cls', '3_unmasked_cls_proj'}:
+        # self.approach_name == '3' or self.approach_name == '3_kq' or self.approach_name == '3_unmasked':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.indices = np.array([(i, j) for i in range(self.convs_height) for j in range(self.convs_width)])
             if 'random_k' in self.approach_args:
@@ -145,10 +151,15 @@ class ConvolutionalSelfAttention(nn.Module):
             if self.approach_name == '3_kq':
                 self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
                 self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+            if self.approach_name in {'3_unmasked_cls', '3_unmasked_cls_proj'}:
+                self.cls = nn.Parameter(torch.rand(1, self.spatial_C, requires_grad=True))
+                if self.approach_name == '3_unmasked_cls_proj':
+                    self.conv_proj = nn.Linear(self.spatial_C, self.spatial_C * self.spatial_C)
             if self.approach_args['forget_gate_nonlinearity'] == 'sigmoid':
                 self.forget_gate_nonlinearity = self.apply_local_sigmoid
             elif self.approach_args['forget_gate_nonlinearity'] == 'softmax':
                 self.forget_gate_nonlinearity = self.apply_local_softmax
+            
         elif self.approach_name == '4' or self.approach_name == '4_mem_efficient':
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
@@ -391,6 +402,53 @@ class ConvolutionalSelfAttention(nn.Module):
         # weighted_X = self.forget_gate_nonlinearity(filter_vals) * X                                                     # [B,HW,C] x [B,HW,1] -> [B,HW,C]
         # output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                   # [B,C,HW] x [HW,Nc] -> [B,C,Nc]
         output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X)
+        return output.reshape(
+            batch_size, self.convs_height, self.convs_width, self.spatial_C
+        )
+
+    def approach3_v2_cls(self, batch):
+        # local_mask = self.local_mask.flatten(1).transpose(1, 0)
+        valid_elements = (1 - self.padding_mask).flatten(2, 4)
+        X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
+        batch_size, H, W, _ = X.shape
+        X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
+        values = self.global_transform(X)                                                                               # [B,HW,C]
+        X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
+        cls_normed = F.normalize(self.cls, dim=-1)                                                                      # [B,1,C]
+        scores = torch.matmul(X_normed, cls_normed.transpose(1, 0)).transpose(2, 1)                                     # [B,HW,C] x ([1,HW] -> [HW,1]) -> [B,HW,1] -> [B,1,HW]
+        attn = self.masked_softmax(                                                                                     # [B,1,HW]
+            scores, 
+            mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
+            dim=-1, epsilon=1e-5 
+        )                                                                                                               # [B,1,HW]
+        
+        filter_vecs = torch.bmm(attn, values)                                                                           # [B,1,C]
+        filter_vals = (filter_vecs * X).sum(-1, keepdim=True)                                                           # [B,1,C] x [B,HW,C] -> [B,HW,1]
+        output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X)
+        return output.reshape(
+            batch_size, self.convs_height, self.convs_width, self.spatial_C
+        )
+    
+    def approach3_v2_cls_proj(self, batch):
+         # local_mask = self.local_mask.flatten(1).transpose(1, 0)
+        valid_elements = (1 - self.padding_mask).flatten(2, 4)
+        X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
+        batch_size, H, W, _ = X.shape
+        X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
+        values = self.global_transform(X)                                                                               # [B,HW,C]
+        X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
+        cls_normed = F.normalize(self.cls, dim=-1)
+        scores = torch.matmul(X_normed, cls_normed.transpose(1, 0)).transpose(2, 1)                                     # [B,HW,C] x ([1,HW] -> [HW,1]) -> [B,HW,1] -> [B,1,HW]
+        attn = self.masked_softmax(                                                                                     # [B,1,HW]
+            scores, 
+            mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
+            dim=-1, epsilon=1e-5 
+        )                                                                                                               # [B,1,HW]
+        filter_vec = torch.bmm(attn, values)                                                                            # [B,1,C]
+        filter_vals = (filter_vec * X).sum(-1, keepdim=True)                                                            # [B,1,C] x [B,HW,C] -> [B,HW,1]
+        projection_matrices = self.conv_proj(filter_vec.squeeze(1)).reshape(-1, self.spatial_C, self.spatial_C)         # f([B,1,C] -> [B,C]) -> [B,CC] -> [B,C,C]
+        X_projected = torch.bmm(X, projection_matrices)                                                                 # [B,HW,C] x [B,C,C]
+        output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X_projected)                    # [B,Nc,C]
         return output.reshape(
             batch_size, self.convs_height, self.convs_width, self.spatial_C
         )
