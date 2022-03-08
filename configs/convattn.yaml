@@ -10,4 +10,4 @@ apply_stochastic_stride: False
 use_residual_connection: False
 suffix: FixedPad
 random_k: -1
-forget_gate_nonlinearity: 'sigmoid'
+forget_gate_nonlinearity: 'softmax'
