@@ -2,7 +2,7 @@
 data
 checkpoint
 runs
-scripts/run_experiments.sh
+scripts/*.sh
 
 # Keeping an empty folder
 logs/*
