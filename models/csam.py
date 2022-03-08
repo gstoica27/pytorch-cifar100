@@ -146,9 +146,9 @@ class ConvolutionalSelfAttention(nn.Module):
                 self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
                 self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             if self.approach_args['forget_gate_nonlinearity'] == 'sigmoid':
-                self.forget_gate_nonlinearity = nn.Sigmoid()
+                self.forget_gate_nonlinearity = self.apply_local_sigmoid
             elif self.approach_args['forget_gate_nonlinearity'] == 'softmax':
-                self.forget_gate_nonlinearity = nn.Softmax(dim=1)
+                self.forget_gate_nonlinearity = self.apply_local_softmax
         elif self.approach_name == '4' or self.approach_name == '4_mem_efficient':
             self.key_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.X_encoding_dim)
@@ -356,7 +356,7 @@ class ConvolutionalSelfAttention(nn.Module):
         exp_sum = torch.matmul(exp_sim, global_mask.transpose(1, 0))                                                    # [B,HW,HW]x[HW,Nc] -> [B,HW,Nc]
         # Invert denominator to obtain \frac{1}{ Σ_j^{HW-K^2} e^{ matmul(Q, [K.T]_j) } } 
         # & add epsilon for numerical stability
-        inverted_sum = 1. / (exp_sum + 6.1e-5)                                                                                      # [B,HW,Nc]
+        inverted_sum = 1. / (exp_sum + 6.1e-5)                                                                          # [B,HW,Nc]
         # Softly transform denominator from all HW to just K^2 by masking out all sums not in X_l 
         masked_denominator = inverted_sum * self.local_mask.transpose(1,0).unsqueeze(0)                                 # [B,HW,Nc]x([Nc,Hw] -> [HW,Nc] -> [1,HW,Nc]) -> [B,HW,Nc]
         # Compute numerator x value: V_i x e^{ matmul(Q, [K.T]_i) }
@@ -373,7 +373,7 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                                                # [B,Nc,C] -> [B,F,F,C]
 
     def approach3_v2(self, batch):
-        local_mask = self.local_mask.flatten(1).transpose(1, 0)
+        # local_mask = self.local_mask.flatten(1).transpose(1, 0)
         valid_elements = (1 - self.padding_mask).flatten(2, 4)
         X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
         batch_size, H, W, _ = X.shape
@@ -388,11 +388,34 @@ class ConvolutionalSelfAttention(nn.Module):
         )                                                                                                               # [B,HW,HW]
         filter_vecs = torch.bmm(attn, values)                                                                           # [B,HW,C]
         filter_vals = (filter_vecs * X).sum(-1, keepdim=True)                                                           # [B,HW,C] x [B,HW,C] -> [B,HW,1]
-        weighted_X = self.forget_gate_nonlinearity(filter_vals) * X                                                     # [B,HW,C] x [B,HW,1] -> [B,HW,C]
-        output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                   # [B,C,HW] x [HW,Nc] -> [B,C,Nc]
+        # weighted_X = self.forget_gate_nonlinearity(filter_vals) * X                                                     # [B,HW,C] x [B,HW,1] -> [B,HW,C]
+        # output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                   # [B,C,HW] x [HW,Nc] -> [B,C,Nc]
+        output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X)
         return output.reshape(
             batch_size, self.convs_height, self.convs_width, self.spatial_C
         )
+
+    def apply_local_softmax(self, filter_raw, pooling_features):
+        """
+        Apply a softmax filter only over each receptive field. 
+        The logic here closely follows that of approach2. 
+        Please see that documentation for a better understanding of what is happening here.
+        """
+        local_mask = self.local_mask.flatten(1).transpose(1, 0)                                                         # [Nc,HW] -> [HW,Nc]
+
+        filter_exp = torch.exp(filter_raw - filter_raw.max(dim=1, keepdim=True)[0]).squeeze(-1)                         # [B,HW]
+        filter_exp_sum = torch.matmul(filter_exp, local_mask)                                                           # [B,Nc]
+        filter_exp_sum_inv = 1. / (filter_exp_sum + 6.1e-5)                                                             # [B,Nc]
+        exp_weighted_features = pooling_features * filter_exp.unsqueeze(-1)                                             # [B,HW,C] x [B,HW,1] -> [B,HW,C]
+        exp_weighted_features_sum = torch.matmul(exp_weighted_features.transpose(2, 1), local_mask).transpose(2, 1)     # ([B,HW,C] -> [B,C,HW]) x [HW,Nc] -> [B,C,Nc] -> [B,Nc,C]
+        weighted_features = exp_weighted_features_sum * filter_exp_sum_inv.unsqueeze(-1)                                # [B,Nc,C] x ([B,Nc] -> [B,Nc,1]) -> [B,Nc,C]
+        return weighted_features
+    
+    def apply_local_sigmoid(self, filter_raw, pooling_features):
+        local_mask = self.local_mask.flatten(1).transpose(1, 0)
+        weighted_X = F.sigmoid(filter_raw) * pooling_features                                                           # [B,HW,C] x [B,HW,1] -> [B,HW,C]
+        output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                   # [B,C,HW] x [HW,Nc] -> [B,C,Nc] -> [B,Nc,C]
+        return output
         
     def approach3(self, batch):
         if self.approach_name == '3_unmasked':
@@ -585,7 +608,6 @@ class ConvolutionalSelfAttention(nn.Module):
 
         return context
         
-
     def local_window_self_attention(self, batch, include_Xl_in_Xg=False):
         global_mask = (1 - self.padding_mask.reshape(1, -1))                                                            # [1,HW]
         if not include_Xl_in_Xg:
