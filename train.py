@@ -197,7 +197,9 @@ if __name__ == '__main__':
         variant_config["forget_gate_nonlinearity"] = args.forget_gate_nonlinearity
     if args.distance_function is not None:
         variant_config["distance_function"] = args.distance_function
-
+    if args.seed is not None:
+        variant_config['seed'] = args.seed
+        
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 
     #data preprocessing:

@@ -22,6 +22,8 @@ from conf import settings
 from utils import get_network, get_test_dataloader, read_yaml
 from models.csam import ConvAttnWrapper
 import pdb
+import scipy.stats as st
+import numpy as np
 
 if __name__ == '__main__':
 
@@ -114,9 +116,31 @@ if __name__ == '__main__':
         print("Top 5 err: ", top5_error)
         print("Parameter numbers: {}".format(sum(p.numel() for p in model.parameters())))
         print('From Checkpoint: {}'.format(best_checkpoint_path))
-        subdir2results[subdir] = {'top1err':top1_error, 'top5err': top5_error}
+        subdir2results[subdir] = {'top1err':top1_error.detach().cpu().numpy(), 'top5err': top5_error.detach().cpu().numpy()}
     for subdir, results in subdir2results.items():
         print('{} | Top1 Error: {} | Top5 Error: {}'.format(
             subdir.split('/')[0].replace('CSAM_Approach', ''), results['top1err'], results['top5err']
             )
         )
+    data_top1 = [results['top1err'] for results in subdir2results.values()]
+    data_top5 = [results['top5err'] for results in subdir2results.values()]
+    
+    interval_top1 = st.t.interval(
+        alpha=0.95, 
+        df=len(data_top1)-1, 
+        loc=np.mean(data_top1), 
+        scale=st.sem(data_top1)
+    )
+
+    interval_top5 = st.t.interval(
+        alpha=0.95, 
+        df=len(data_top5)-1, 
+        loc=np.mean(data_top5), 
+        scale=st.sem(data_top5)
+    )
+
+    print('Confidence Intervals | Top 1: {} ± {} | Top 5: {} ± {}'.format(
+        np.mean(data_top1), np.mean(data_top1) - interval_top1[0],
+        np.mean(data_top5), np.mean(data_top5) - interval_top5[0]
+    ))
+

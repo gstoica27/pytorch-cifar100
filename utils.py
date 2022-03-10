@@ -23,7 +23,7 @@ def name_model(config):
     for info in config['injection_info']:
         formatted_injection_info += str(tuple(info))
    
-    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}_Residual{}_Forget{}_SimMetr{}'.format(
+    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}_Residual{}_Forget{}_SimMetr{}_Seed{}'.format(
         config['approach_name'], 
         config['pos_emb_dim'], 
         formatted_injection_info, 
@@ -33,9 +33,12 @@ def name_model(config):
         config['use_residual_connection'],
         config['forget_gate_nonlinearity'],
         config['similarity_metric'],
+        config['seed'],
     )
     if 'random_k' in config:
         model_name += '_k{}'.format(config['random_k'])
+    if '3_unmasked' in config['approach_name']:
+        model_name += '_Pooling{}'.format(config['forget_gate_nonlinearity'])
     return model_name
 
 def read_yaml(path):

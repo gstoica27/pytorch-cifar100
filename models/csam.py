@@ -13,6 +13,8 @@ from torch.optim.lr_scheduler import StepLR
 import numpy as np
 from tqdm import tqdm
 from positional_encodings import PositionalEncoding2D
+import torchvision
+
 """
 Modified from: https://github.com/pytorch/examples/blob/master/mnist/main.py
 """
@@ -63,6 +65,7 @@ class ConvolutionalSelfAttention(nn.Module):
             '3_unmasked': self.approach3_v2,
             '3_unmasked_cls': self.approach3_v2_cls,
             '3_unmasked_cls_proj': self.approach3_v2_cls_proj,
+            '3_unmasked_avgHW': self.approach3_v2_avgHW,
             '4': self.approach4,
             '5': self.approach5,
             '4_mem_efficient': self.approach4_mem_efficient,
@@ -76,7 +79,9 @@ class ConvolutionalSelfAttention(nn.Module):
             'background_self_attention': self.background_self_attention,
             'self_attention_cpg': self.self_attention_cpg,
             'kl_div_self_attention': self.kl_div_self_attention,
-            'gru_self_attention': self.gru_self_attention
+            'gru_self_attention': self.gru_self_attention,
+            'gaussian_blur': self.gaussian_blur,
+            'box_filter': self.box_filter
         }
 
         self.local_mask = self.compute_input_mask()
@@ -139,7 +144,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.global_transform = nn.Linear(self.X_encoding_dim, 1)
             self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
-        elif self.approach_name in {'3', '3_kq', '3_unmasked', '3_unmasked_cls', '3_unmasked_cls_proj'}:
+        elif self.approach_name in {'3', '3_kq', '3_unmasked', '3_unmasked_cls', '3_unmasked_cls_proj', '3_unmasked_avgHW'}:
         # self.approach_name == '3' or self.approach_name == '3_kq' or self.approach_name == '3_unmasked':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.indices = np.array([(i, j) for i in range(self.convs_height) for j in range(self.convs_width)])
@@ -181,6 +186,7 @@ class ConvolutionalSelfAttention(nn.Module):
                 if value_dim < 0: value_dim = self.spatial_C
                 self.value_transform = nn.Linear(self.spatial_C, value_dim)
                 self.cpg = nn.Linear(self.spatial_C, self.spatial_C * value_dim)
+        elif self.approach_name in {'gaussian_blur', 'box_filter'}: pass
         else:
             raise ValueError('Invalid Approach type')
 
@@ -457,6 +463,32 @@ class ConvolutionalSelfAttention(nn.Module):
         return output.reshape(
             batch_size, self.convs_height, self.convs_width, self.spatial_C
         )
+
+    def approach3_v2_avgHW(self, batch):
+        X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
+        batch_size, H, W, _ = X.shape
+        X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
+        values = self.global_transform(X)                                                                               # [B,HW,C]
+        filter_vecs = values.mean(dim=1, keepdim=True)
+        filter_vals = (filter_vecs * X).sum(-1, keepdim=True)                                                           # [B,1,C] x [B,HW,C] -> [B,HW,1]
+        output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X)
+        return output.reshape(
+            batch_size, self.convs_height, self.convs_width, self.spatial_C
+        )
+
+    def gaussian_blur(self, batch):
+        X = batch.permute(0, 3, 1, 2)
+        # output = self.gaussian_blur(X)
+        # pdb.set_trace()
+        output = torchvision.transforms.functional.gaussian_blur(X, kernel_size=self.filter_K)
+        residual = self.undo_padding(output)
+        return residual.permute(0, 2, 3, 1)
+    
+    def box_filter(self, batch):
+        X = batch.permute(0, 3, 1, 2)
+        output = F.avg_pool2d(X, kernel_size=self.filter_K, stride=self.stride)
+        # output = self.avg_filter(X)
+        return output.permute(0, 2, 3, 1)
 
     def apply_local_softmax(self, filter_raw, pooling_features):
         """
