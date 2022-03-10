@@ -67,6 +67,7 @@ class ConvolutionalSelfAttention(nn.Module):
             '5': self.approach5,
             '4_mem_efficient': self.approach4_mem_efficient,
             'self_attention': self.self_attention,
+            'self_attention_no_kq': self.self_attention,
             'local_window_self_attention': self.local_window_self_attention,
             'local_window_self_attention_unmasked': self.local_window_self_attention_unmasked,
             'pytorch_self_attention': self.pytorch_self_attention,
@@ -93,11 +94,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.padding_mask = self.padding_mask.cuda()
 
     def compute_padding(self, padding_type):
-        if padding_type.lower() == 'valid' or self.approach_name in {
-            'self_attention', 'pytorch_self_attention', 'reversed_self_attention',
-            'reversed_self_attention_elemwise', 'reversed_self_attention_normal',
-            'self_attention_cpg', 'kl_div_self_attention', 'gru_self_attention'
-            }:
+        if padding_type.lower() == 'valid' or ('self_attention' in self.approach_name and 'local_window' not in self.approach_name):
             padding_tuple = (0, 0, 0, 0)
         elif padding_type.lower() == 'same':
             padding_x = int((self.stride * (self.input_W - 1) - self.input_W + self.filter_K) / 2)
@@ -168,13 +165,7 @@ class ConvolutionalSelfAttention(nn.Module):
             self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
-        elif self.approach_name in {
-            'self_attention', 'local_window_self_attention', 'local_window_self_attention_unmasked',
-            'pytorch_self_attention', 'reversed_self_attention',
-            'reversed_self_attention_elemwise', 'reversed_self_attention_normal',
-            'background_self_attention', 'self_attention_cpg', 'kl_div_self_attention',
-            'gru_self_attention'
-            }:
+        elif 'self_attention' in self.approach_name:
             self.key_transform = nn.Linear(self.spatial_C, self.spatial_C)
             self.query_transform = nn.Linear(self.spatial_C, self.spatial_C)
             self.value_transform = nn.Linear(self.spatial_C, self.spatial_C)
@@ -617,9 +608,13 @@ class ConvolutionalSelfAttention(nn.Module):
     def self_attention(self, batch):
         B = batch.shape[0]
         batch_pos = self.maybe_add_positional_encodings(batch)
-        queries = self.query_transform(batch_pos).flatten(1, 2)                                                         # [B,HW,C]
         values = self.value_transform(batch_pos).flatten(1, 2)                                                          # [B,HW,C]
-        keys = self.key_transform(batch_pos).flatten(1, 2)                                                              # [B,HW,C]
+        if self.approach_name == 'self_attention_no_kq':
+            queries = batch_pos.flatten(1, 2)                                                                           # [B,HW,C]
+            keys = batch_pos.flatten(1, 2)                                                                              # [B,HW,C]
+        else:
+            queries = self.query_transform(batch_pos).flatten(1, 2)                                                     # [B,HW,C]
+            keys = self.key_transform(batch_pos).flatten(1, 2)                                                          # [B,HW,C]
 
         score = torch.bmm(queries, keys.transpose(1, 2)) / math.sqrt(queries.shape[-1])                                 # [B,HW,C] x [B,C,HW] -> [B,HW,HW]
         attn = F.softmax(score, -1)                                                                                     # [B,HW,HW]
