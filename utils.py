@@ -23,14 +23,16 @@ def name_model(config):
     for info in config['injection_info']:
         formatted_injection_info += str(tuple(info))
    
-    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}_Residual{}'.format(
+    model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}_Residual{}_Forget{}_SimMetr{}'.format(
         config['approach_name'], 
         config['pos_emb_dim'], 
         formatted_injection_info, 
         config['softmax_temp'], 
         config['apply_stochastic_stride'], 
         config['stride'],
-        config['use_residual_connection']
+        config['use_residual_connection'],
+        config['forget_gate_nonlinearity'],
+        config['similarity_metric'],
     )
     if 'random_k' in config:
         model_name += '_k{}'.format(config['random_k'])

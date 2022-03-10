@@ -381,17 +381,22 @@ class ConvolutionalSelfAttention(nn.Module):
         batch_size, H, W, _ = X.shape
         X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
         values = self.global_transform(X)                                                                               # [B,HW,C]
+
         X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
-        scores = torch.bmm(X_normed, X_normed.transpose(2, 1))                                                          # [B,HW,HW]
+        if self.approach_args["similarity_metric"] == 'cosine_similarity':
+            scores = torch.bmm(X_normed, X_normed.transpose(2, 1))                                                      # [B,HW,HW]
+        elif self.approach_args["similarity_metric"] == 'dot_product':
+            scores = torch.bmm(X, X.transpose(2, 1))                                                                    # [B,HW,HW]
         attn = self.masked_softmax(                                                                                     # [B,HW,HW]
             scores, 
             mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
             dim=-1, epsilon=1e-5 
         )                                                                                                               # [B,HW,HW]
+
         filter_vecs = torch.bmm(attn, values)                                                                           # [B,HW,C]
         filter_vals = (filter_vecs * X).sum(-1, keepdim=True)                                                           # [B,HW,C] x [B,HW,C] -> [B,HW,1]
-        # weighted_X = self.forget_gate_nonlinearity(filter_vals) * X                                                     # [B,HW,C] x [B,HW,1] -> [B,HW,C]
-        # output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                   # [B,C,HW] x [HW,Nc] -> [B,C,Nc]
+        # weighted_X = self.forget_gate_nonlinearity(filter_vals) * X                                                   # [B,HW,C] x [B,HW,1] -> [B,HW,C]
+        # output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                 # [B,C,HW] x [HW,Nc] -> [B,C,Nc]
         output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X)
         return output.reshape(
             batch_size, self.convs_height, self.convs_width, self.spatial_C
@@ -404,9 +409,13 @@ class ConvolutionalSelfAttention(nn.Module):
         batch_size, H, W, _ = X.shape
         X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
         values = self.global_transform(X)                                                                               # [B,HW,C]
+
         X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
         cls_normed = F.normalize(self.cls, dim=-1)                                                                      # [B,1,C]
-        scores = torch.matmul(X_normed, cls_normed.transpose(1, 0)).transpose(2, 1)                                     # [B,HW,C] x ([1,HW] -> [HW,1]) -> [B,HW,1] -> [B,1,HW]
+        if self.approach_args["similarity_metric"] == 'cosine_similarity':
+            scores = torch.matmul(X_normed, cls_normed.transpose(1, 0)).transpose(2, 1)                                 # [B,HW,C] x ([1,HW] -> [HW,1]) -> [B,HW,1] -> [B,1,HW]
+        elif self.approach_args["similarity_metric"] == 'dot_product':
+            scores = torch.matmul(X, self.cls.transpose(1, 0)).transpose(2, 1)                                          # [B,HW,C] x ([1,HW] -> [HW,1]) -> [B,HW,1] -> [B,1,HW]
         attn = self.masked_softmax(                                                                                     # [B,1,HW]
             scores, 
             mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
@@ -427,14 +436,19 @@ class ConvolutionalSelfAttention(nn.Module):
         batch_size, H, W, _ = X.shape
         X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
         values = self.global_transform(X)                                                                               # [B,HW,C]
+
         X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
         cls_normed = F.normalize(self.cls, dim=-1)
-        scores = torch.matmul(X_normed, cls_normed.transpose(1, 0)).transpose(2, 1)                                     # [B,HW,C] x ([1,HW] -> [HW,1]) -> [B,HW,1] -> [B,1,HW]
+        if self.approach_args["similarity_metric"] == 'cosine_similarity':
+            scores = torch.matmul(X_normed, cls_normed.transpose(1, 0)).transpose(2, 1)                                 # [B,HW,C] x ([1,HW] -> [HW,1]) -> [B,HW,1] -> [B,1,HW]
+        elif self.approach_args["similarity_metric"] == 'dot_product':
+            scores = torch.matmul(X, self.cls.transpose(1, 0)).transpose(2, 1)                                          # [B,HW,C] x ([1,HW] -> [HW,1]) -> [B,HW,1] -> [B,1,HW]
         attn = self.masked_softmax(                                                                                     # [B,1,HW]
             scores, 
             mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
             dim=-1, epsilon=1e-5 
         )                                                                                                               # [B,1,HW]
+
         filter_vec = torch.bmm(attn, values)                                                                            # [B,1,C]
         filter_vals = (filter_vec * X).sum(-1, keepdim=True)                                                            # [B,1,C] x [B,HW,C] -> [B,HW,1]
         projection_matrices = self.conv_proj(filter_vec.squeeze(1)).reshape(-1, self.spatial_C, self.spatial_C)         # f([B,1,C] -> [B,C]) -> [B,CC] -> [B,C,C]
@@ -499,6 +513,10 @@ class ConvolutionalSelfAttention(nn.Module):
             keys = self.key_transform(X)
             queries = self.query_transform(X)
             denom = math.sqrt(queries.shape[-1])
+        elif self.approach_args["similarity_metric"] == 'dot_product':
+            keys = X
+            queries = X
+            denom = 1.
 
         # output = torch.zeros(batch_size, convs_height, convs_width, self.spatial_C, dtype=torch.float).cuda()           # [B,F,F,C]
         # TODO: Hack. Assumes Padding is 'same'

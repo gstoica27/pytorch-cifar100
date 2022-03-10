@@ -153,6 +153,7 @@ if __name__ == '__main__':
     parser.add_argument('--apply_stochastic_stride', action='store_true', default=None, help='Apply stochastic stride')
     parser.add_argument('--use_residual_connection', action='store_true', default=None, help='Use residual connection')
     parser.add_argument('--forget_gate_nonlinearity', help='Only used in approach 3. Nonlinearlity to apply for the "forget gate"')
+    parser.add_argument('--similarity_metric', help='Only used in approach 3. Whether to use cosine similarity ("cosine_similarity") or dot product ("dot_product") to compute scores')
     parser.add_argument('--seed', default=17, type=int)
 
     parser.add_argument(
@@ -194,6 +195,8 @@ if __name__ == '__main__':
         variant_config["use_residual_connection"] = args.use_residual_connection
     if args.forget_gate_nonlinearity is not None:
         variant_config["forget_gate_nonlinearity"] = args.forget_gate_nonlinearity
+    if args.distance_function is not None:
+        variant_config["distance_function"] = args.distance_function
 
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 
