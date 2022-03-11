@@ -17,7 +17,7 @@ require_a40 = False
 num_repetitions = 1
 
 # Specify configs
-approach_names = ['3_unmasked']
+approach_names = ['3_unmasked_avgU']
 filter_sizes = [3]
 strides = [1]
 stackings = [1]
@@ -28,6 +28,7 @@ positional_encodings = [0]
 residuals = ['False']
 forget_gate_nonlinearities = ['sigmoid']
 similarity_metrics = ['cosine_similarity']
+seeds = [17, 0 , 2019, 2022, 1776]
 
 experiment_list = itertools.product(
     approach_names,
@@ -39,7 +40,8 @@ experiment_list = itertools.product(
     residuals,
     range(num_repetitions),
     forget_gate_nonlinearities,
-    similarity_metrics
+    similarity_metrics,
+    seeds
 )
 
 indices = {
@@ -53,6 +55,7 @@ indices = {
     'repetition': 7,
     'forget_gate_nonlinearity': 8,
     'similarity_metric': 9,
+    'seed': 10
 }
 
 def generate_command(config, env_name):
@@ -76,6 +79,7 @@ def generate_command(config, env_name):
         + f''' --stride "{config[indices['stride']]}"'''
         + f''' --forget_gate_nonlinearity "{config[indices['forget_gate_nonlinearity']]}"'''
         + f''' --similarity_metric "{config[indices['similarity_metric']]}"'''
+        + f''' --seed "{config[indices['seed']]}"'''
         + residual_connection_arg
         + "'"
     )
