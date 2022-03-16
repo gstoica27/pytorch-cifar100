@@ -1,9 +1,11 @@
 **/__pycache__
+**/.ipynb_checkpoints
 data
 checkpoint
 runs
 scripts/*.sh
 *.swp
+**/.ipynb_checkpoints
 
 # Keeping an empty folder
 logs/*
