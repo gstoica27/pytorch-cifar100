@@ -169,6 +169,8 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     np.random.seed(args.seed)
+    generator = torch.Generator()
+    generator.manual_seed(args.seed)
 
     variant_config = read_yaml(args.variant_config_path)
     print(variant_config)
@@ -195,11 +197,11 @@ if __name__ == '__main__':
         variant_config["use_residual_connection"] = args.use_residual_connection
     if args.forget_gate_nonlinearity is not None:
         variant_config["forget_gate_nonlinearity"] = args.forget_gate_nonlinearity
-    if args.distance_function is not None:
-        variant_config["distance_function"] = args.distance_function
+    if args.similarity_metric is not None:
+        variant_config["similarity_metric"] = args.similarity_metric
     if args.seed is not None:
         variant_config['seed'] = args.seed
-        
+
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 
     #data preprocessing:
@@ -208,7 +210,8 @@ if __name__ == '__main__':
         settings.CIFAR100_TRAIN_STD,
         num_workers=4,
         batch_size=args.b,
-        shuffle=True
+        shuffle=True,
+        generator=generator
     )
 
     cifar100_test_loader = get_test_dataloader(

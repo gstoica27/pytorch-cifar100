@@ -19,10 +19,8 @@ import conf
 
 
 def name_model(config):
-    formatted_injection_info = ''
-    for info in config['injection_info']:
-        formatted_injection_info += str(tuple(info))
-   
+    formatted_injection_info = ''.join([str(tuple(info)) for info in config['injection_info']])
+    formatted_injection_info = formatted_injection_info.replace(' ', '').replace('(', '[').replace(')', ']')
     model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}_Residual{}_Forget{}_SimMetr{}_Seed{}'.format(
         config['approach_name'], 
         config['pos_emb_dim'], 
@@ -37,8 +35,6 @@ def name_model(config):
     )
     if 'random_k' in config:
         model_name += '_k{}'.format(config['random_k'])
-    if '3_unmasked' in config['approach_name']:
-        model_name += '_Pooling{}'.format(config['forget_gate_nonlinearity'])
     return model_name
 
 def read_yaml(path):
@@ -207,7 +203,7 @@ def get_network(args):
     return net
 
 
-def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=True):
+def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=True, generator=None):
     """ return training dataloader
     Args:
         mean: mean of cifar100 training dataset
@@ -228,9 +224,12 @@ def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=Tru
         transforms.Normalize(mean, std)
     ])
     #cifar100_training = CIFAR100Train(path, transform=transform_train)
-    cifar100_training = torchvision.datasets.CIFAR100(root=os.environ.get('CIFAR_ROOT', 'data/cifar-100-python'), train=True, download=True, transform=transform_train)
+    cifar100_training = torchvision.datasets.CIFAR100(
+        root=os.environ.get('CIFAR_ROOT', 'data/cifar-100-python'), 
+        train=True, download=True, transform=transform_train
+        )
     cifar100_training_loader = DataLoader(
-        cifar100_training, shuffle=shuffle, num_workers=num_workers, batch_size=batch_size)
+        cifar100_training, shuffle=shuffle, num_workers=num_workers, batch_size=batch_size, generator=generator)
 
     return cifar100_training_loader
 
