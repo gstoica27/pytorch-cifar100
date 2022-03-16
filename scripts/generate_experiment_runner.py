@@ -1,5 +1,8 @@
-import os
+from datetime import date
+import time
+import numpy as np
 import itertools
+import os
 
 """
 Use this file to bulk run experiments!
@@ -11,12 +14,15 @@ Use this file to bulk run experiments!
 5. This should generate a scripts/run_experiments.sh, which you can execute for your batch run.
 """
 
+def get_seed(repetition_num):
+    defaults = [17, 0 , 2019, 2022, 1776]
+    return defaults[repetition_num] if repetition_num < len(defaults) else repetition_num + np.max(defaults)
+
 # Logistical Options
 do_resume = False
 require_a40 = False
 num_repetitions = 1
 on_overcap = True
-request_params = 'overcap -A overcap' if on_overcap else 'short'
 
 # Specify configs
 approach_names = ['3_unmasked_sv']
@@ -30,7 +36,7 @@ positional_encodings = [0]
 residuals = ['False']
 forget_gate_nonlinearities = ['sigmoid']
 similarity_metrics = ['cosine_similarity']
-seeds = [17, 0 , 2019, 2022, 1776]
+seeds = [get_seed(i) for i in range(num_repetitions)]
 
 experiment_list = itertools.product(
     approach_names,
@@ -40,7 +46,6 @@ experiment_list = itertools.product(
     injection_points,
     positional_encodings,
     residuals,
-    range(num_repetitions),
     forget_gate_nonlinearities,
     similarity_metrics,
     seeds
@@ -54,35 +59,60 @@ indices = {
     'injection_point': 4,
     'positional_encoding': 5,
     'residual': 6,
-    'repetition': 7,
-    'forget_gate_nonlinearity': 8,
-    'similarity_metric': 9,
-    'seed': 10
+    'forget_gate_nonlinearity': 7,
+    'similarity_metric': 8,
+    'seed': 9
 }
+
+def get_injection_info(config):
+    return [
+        [i, config[indices['stacking']], config[indices['filter_size']]] for i in config[indices['injection_point']]
+    ]
+
+def log_path(config):
+    script_dir = os.path.dirname(os.path.realpath(__file__)) 
+    log_root_dir = os.path.join(os.path.dirname(script_dir), "logs/experiment_output")
+    log_dir = os.path.join(log_root_dir, config[indices['approach_name']], date.today().isoformat())
+
+    formatted_injection_info = ''.join([str(tuple(info)) for info in get_injection_info(config)])
+    formatted_injection_info = formatted_injection_info.replace(' ', '').replace('(', '[').replace(')', ']')
+    model_name = 'PosEmb{}_AfterConv{}_Stride{}_Residual{}_Forget{}_SimMetr{}_Seed{}'.format(
+         config[indices['positional_encoding']],
+         formatted_injection_info,
+         config[indices['stride']],
+         config[indices['residual']],
+         config[indices['forget_gate_nonlinearity']],
+         config[indices['similarity_metric']],
+         config[indices['seed']],
+    )
+    local_time = time.strftime("%H:%M:%S", time.localtime())
+    file_name = f'{local_time}_{model_name}.txt'
+
+    return os.path.join(log_dir, file_name)
+
 
 def generate_command(config, env_name):
     resume_arg = " -resume" if do_resume else ""
     a40_constraint_arg = " --constraint=a40" if require_a40 else ""
-
-    injection_info = [
-        [i, config[indices['stacking']], config[indices['filter_size']]] for i in config[indices['injection_point']]
-    ]
+    request_params = 'overcap -A overcap' if on_overcap else 'short'
 
     residual_connection_arg = " --use_residual_connection" if config[indices['residual']] == 'True' else ""
 
     out = (
-        f"'source /srv/share4/thearn6/miniconda3/etc/profile.d/conda.sh && conda activate {env_name} && "
-        f"srun -p {request_params}{a40_constraint_arg} -t 48:00:00"
-        + f''' --gres gpu:1 -c 6 python train.py{resume_arg} -net "resnet18" '''
+        f''''source /srv/share4/thearn6/miniconda3/etc/profile.d/conda.sh && conda activate {env_name} && mkdir -p "`dirname {log_path(config)}`" &&'''
+        f''' srun -p {request_params}{a40_constraint_arg} -t 48:00:00'''
+        + f''' --gres gpu:1 -c 6'''
+        + f''' python train.py{resume_arg} -net "resnet18" '''
         + f''' --approach_name "{config[indices['approach_name']]}"'''
-        + f''' --suffix "{config[indices['repetition']]}"'''
+        #+ f''' --suffix "{config[indices['repetition']]}"'''
         + f''' --pos_emb_dim {config[indices['positional_encoding']]}'''
-        + f''' --injection_info "{injection_info}"'''
+        + f''' --injection_info "{get_injection_info(config)}"'''
         + f''' --stride "{config[indices['stride']]}"'''
         + f''' --forget_gate_nonlinearity "{config[indices['forget_gate_nonlinearity']]}"'''
         + f''' --similarity_metric "{config[indices['similarity_metric']]}"'''
         + f''' --seed "{config[indices['seed']]}"'''
         + residual_connection_arg
+        + f''' 2>&1 | tee "{log_path(config)}"'''
         + "'"
     )
 

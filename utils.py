@@ -19,10 +19,8 @@ import conf
 
 
 def name_model(config):
-    formatted_injection_info = ''
-    for info in config['injection_info']:
-        formatted_injection_info += str(tuple(info))
-   
+    formatted_injection_info = ''.join([str(tuple(info)) for info in config['injection_info']])
+    formatted_injection_info = formatted_injection_info.replace(' ', '').replace('(', '[').replace(')', ']')
     model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}_Residual{}_Forget{}_SimMetr{}_Seed{}'.format(
         config['approach_name'], 
         config['pos_emb_dim'], 
@@ -37,8 +35,6 @@ def name_model(config):
     )
     if 'random_k' in config:
         model_name += '_k{}'.format(config['random_k'])
-    if '3_unmasked' in config['approach_name']:
-        model_name += '_Pooling{}'.format(config['forget_gate_nonlinearity'])
     return model_name
 
 def read_yaml(path):
