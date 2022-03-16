@@ -15,9 +15,11 @@ Use this file to bulk run experiments!
 do_resume = False
 require_a40 = False
 num_repetitions = 1
+on_overcap = True
+request_params = 'overcap -A overcap' if on_overcap else 'short'
 
 # Specify configs
-approach_names = ['3_unmasked_avgU']
+approach_names = ['3_unmasked_sv']
 filter_sizes = [3]
 strides = [1]
 stackings = [1]
@@ -70,7 +72,7 @@ def generate_command(config, env_name):
 
     out = (
         f"'source /srv/share4/thearn6/miniconda3/etc/profile.d/conda.sh && conda activate {env_name} && "
-        f"srun -p overcap -A overcap{a40_constraint_arg} -t 48:00:00"
+        f"srun -p {request_params}{a40_constraint_arg} -t 48:00:00"
         + f''' --gres gpu:1 -c 6 python train.py{resume_arg} -net "resnet18" '''
         + f''' --approach_name "{config[indices['approach_name']]}"'''
         + f''' --suffix "{config[indices['repetition']]}"'''
@@ -120,4 +122,4 @@ def generate_bash_executable(env_name="csam", offset=0):
 
 
 if __name__ == "__main__":
-    generate_bash_executable(env_name="csam", offset=300)
+    generate_bash_executable(env_name="csam", offset=200)

@@ -67,6 +67,8 @@ class ConvolutionalSelfAttention(nn.Module):
             '3_unmasked_cls_proj': self.approach3_v2_cls_proj,
             '3_unmasked_avgHW': self.approach3_v2_avgHW,
             '3_unmasked_avgU': self.approach3_v2_avgU,
+            '3_unmasked_sv': self.approach3_v2_sv,
+            '3_unmasked_proj': self.approach3_v2_proj,
             '4': self.approach4,
             '5': self.approach5,
             '4_mem_efficient': self.approach4_mem_efficient,
@@ -88,7 +90,8 @@ class ConvolutionalSelfAttention(nn.Module):
         self.local_mask = self.compute_input_mask()
         if self.approach_name in {
             '3', '3_kq', '3_unmasked', '4', '4_mem_efficient', 
-            '3_unmasked_cls', '3_unmasked_cls_proj', '3_unmasked_avgU'
+            '3_unmasked_cls', '3_unmasked_cls_proj', '3_unmasked_avgU', 
+            '3_unmasked_proj', '3_unmasked_sv'
         }:
             new_shape = [self.num_convs, 1, self.spatial_H, self.spatial_W, 1]                                      # [Nc,1,H,W,1]
             self.local_mask = self.local_mask.reshape(*new_shape)
@@ -147,9 +150,8 @@ class ConvolutionalSelfAttention(nn.Module):
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
         elif self.approach_name in {
             '3', '3_kq', '3_unmasked', '3_unmasked_cls', '3_unmasked_cls_proj', 
-            '3_unmasked_avgHW', '3_unmasked_avgU'
+            '3_unmasked_avgHW', '3_unmasked_avgU', '3_unmasked_proj', '3_unmasked_sv'
         }:
-        # self.approach_name == '3' or self.approach_name == '3_kq' or self.approach_name == '3_unmasked':
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.indices = np.array([(i, j) for i in range(self.convs_height) for j in range(self.convs_width)])
             if 'random_k' in self.approach_args:
@@ -161,6 +163,11 @@ class ConvolutionalSelfAttention(nn.Module):
                 self.cls = nn.Parameter(torch.rand(1, self.spatial_C, requires_grad=True))
                 if self.approach_name == '3_unmasked_cls_proj':
                     self.conv_proj = nn.Linear(self.spatial_C, self.spatial_C * self.spatial_C)
+            elif self.approach_name == '3_unmasked_proj':
+                self.channel_mul = nn.Linear(self.spatial_C, self.spatial_C)
+                self.channel_bias = nn.Linear(self.spatial_C, self.spatial_C)
+            elif self.approach_name == '3_unmasked_sv':
+                self.match_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             if self.approach_args['forget_gate_nonlinearity'] == 'sigmoid':
                 self.forget_gate_nonlinearity = self.apply_local_sigmoid
             elif self.approach_args['forget_gate_nonlinearity'] == 'softmax':
@@ -506,6 +513,63 @@ class ConvolutionalSelfAttention(nn.Module):
         values = self.global_transform(X)                                                                               # [B,HW,C]
         filter_vecs = values.mean(dim=1, keepdim=True)
         filter_vals = (filter_vecs * X).sum(-1, keepdim=True)                                                           # [B,1,C] x [B,HW,C] -> [B,HW,1]
+        output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X)
+        return output.reshape(
+            batch_size, self.convs_height, self.convs_width, self.spatial_C
+        )
+    
+    def approach3_v2_proj(self, batch):
+        valid_elements = (1 - self.padding_mask).flatten(2, 4)
+        X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
+        batch_size, H, W, _ = X.shape
+        X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
+        values = self.global_transform(X)                                                                               # [B,HW,C]
+
+        X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
+        if self.approach_args["similarity_metric"] == 'cosine_similarity':
+            scores = torch.bmm(X_normed, X_normed.transpose(2, 1))                                                      # [B,HW,HW]
+        elif self.approach_args["similarity_metric"] == 'dot_product':
+            scores = torch.bmm(X, X.transpose(2, 1))                                                                    # [B,HW,HW]
+        attn = self.masked_softmax(                                                                                     # [B,HW,HW]
+            scores, 
+            mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
+            dim=-1, epsilon=1e-5 
+        )                                                                                                               # [B,HW,HW]
+
+        filter_vecs = torch.bmm(attn, values)                                                                           # [B,HW,C]
+        filter_vals = (filter_vecs * X).sum(-1, keepdim=True)                                                           # [B,HW,C] x [B,HW,C] -> [B,HW,1]
+
+        multipliers = self.channel_mul(filter_vecs)                                                                     # [B,HW,C]
+        biases = self.channel_bias(filter_vecs)                                                                         # [B,HW,C]
+
+        X_proj = multipliers * X + biases
+
+        output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X_proj)
+        return output.reshape(
+            batch_size, self.convs_height, self.convs_width, self.spatial_C
+        )
+    
+    def approach3_v2_sv(self, batch):
+        valid_elements = (1 - self.padding_mask).flatten(2, 4)
+        X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
+        batch_size, H, W, _ = X.shape
+        X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
+        values = self.global_transform(X)                                                                               # [B,HW,C]
+        match_vals = self.match_transform(X)
+        X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
+        if self.approach_args["similarity_metric"] == 'cosine_similarity':
+            scores = torch.bmm(X_normed, X_normed.transpose(2, 1))                                                      # [B,HW,HW]
+        elif self.approach_args["similarity_metric"] == 'dot_product':
+            scores = torch.bmm(X, X.transpose(2, 1))                                                                    # [B,HW,HW]
+        attn = self.masked_softmax(                                                                                     # [B,HW,HW]
+            scores, 
+            mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
+            dim=-1, epsilon=1e-5 
+        )                                                                                                               # [B,HW,HW]
+
+        filter_vecs = torch.bmm(attn, values)                                                                           # [B,HW,C]
+        filter_vals = (filter_vecs * match_vals).sum(-1, keepdim=True)                                                           # [B,HW,C] x [B,HW,C] -> [B,HW,1]
+
         output = self.forget_gate_nonlinearity(filter_raw=filter_vals, pooling_features=X)
         return output.reshape(
             batch_size, self.convs_height, self.convs_width, self.spatial_C

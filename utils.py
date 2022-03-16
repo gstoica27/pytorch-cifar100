@@ -207,7 +207,7 @@ def get_network(args):
     return net
 
 
-def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=True):
+def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=True, generator=None):
     """ return training dataloader
     Args:
         mean: mean of cifar100 training dataset
@@ -228,9 +228,12 @@ def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=Tru
         transforms.Normalize(mean, std)
     ])
     #cifar100_training = CIFAR100Train(path, transform=transform_train)
-    cifar100_training = torchvision.datasets.CIFAR100(root=os.environ.get('CIFAR_ROOT', 'data/cifar-100-python'), train=True, download=True, transform=transform_train)
+    cifar100_training = torchvision.datasets.CIFAR100(
+        root=os.environ.get('CIFAR_ROOT', 'data/cifar-100-python'), 
+        train=True, download=True, transform=transform_train
+        )
     cifar100_training_loader = DataLoader(
-        cifar100_training, shuffle=shuffle, num_workers=num_workers, batch_size=batch_size)
+        cifar100_training, shuffle=shuffle, num_workers=num_workers, batch_size=batch_size, generator=generator)
 
     return cifar100_training_loader
 
