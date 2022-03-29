@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from conf import settings
 from utils import get_network, get_test_dataloader, read_yaml
-from models.csam_old import ConvAttnWrapper
+from models.csam import ConvAttnWrapper
 import pdb
 import scipy.stats as st
 import numpy as np

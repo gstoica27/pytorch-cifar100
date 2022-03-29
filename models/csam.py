@@ -69,6 +69,7 @@ class ConvolutionalSelfAttention(nn.Module):
             '3_unmasked_avgU': self.approach3_v2_avgU,
             '3_unmasked_sv': self.approach3_v2_sv,
             '3_unmasked_proj': self.approach3_v2_proj,
+            '3_unmasked_csigmoid': self.approach3_v2_cigmoid,
             '4': self.approach4,
             '5': self.approach5,
             '4_mem_efficient': self.approach4_mem_efficient,
@@ -84,7 +85,9 @@ class ConvolutionalSelfAttention(nn.Module):
             'kl_div_self_attention': self.kl_div_self_attention,
             'gru_self_attention': self.gru_self_attention,
             'gaussian_blur': self.gaussian_blur,
-            'box_filter': self.box_filter
+            'box_filter': self.box_filter,
+            'gelu': self.gelu,
+            'convolutional_self_attention': self.convolutional_self_attention,
         }
 
         self.local_mask = self.compute_input_mask()
@@ -150,7 +153,8 @@ class ConvolutionalSelfAttention(nn.Module):
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
         elif self.approach_name in {
             '3', '3_kq', '3_unmasked', '3_unmasked_cls', '3_unmasked_cls_proj', 
-            '3_unmasked_avgHW', '3_unmasked_avgU', '3_unmasked_proj', '3_unmasked_sv'
+            '3_unmasked_avgHW', '3_unmasked_avgU', '3_unmasked_proj', '3_unmasked_sv',
+            '3_unmasked_csigmoid'
         }:
             self.global_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.indices = np.array([(i, j) for i in range(self.convs_height) for j in range(self.convs_width)])
@@ -181,6 +185,20 @@ class ConvolutionalSelfAttention(nn.Module):
             self.key_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.query_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
             self.value_transform = nn.Linear(self.X_encoding_dim, self.spatial_C)
+        elif 'convolutional_self_attention' == self.approach_name:
+            self.baseplate_params = nn.Parameter(
+                torch.rand((self.filter_K, self.filter_K, self.spatial_C))
+            )
+            self.msa = nn.MultiheadAttention(
+                embed_dim=self.spatial_C, 
+                num_heads=self.approach_args['num_heads'], 
+                batch_first=True
+            )
+
+            self.value_reducer = nn.Linear(self.spatial_C, self.approach_args['vdim'])
+            self.weight_proj = nn.Linear(self.approach_args['vdim'], self.spatial_C * self.spatial_C, bias=False)
+            self.bias_proj = nn.Linear(self.approach_args['vdim'], self.spatial_C, bias=False)
+
         elif 'self_attention' in self.approach_name:
             self.key_transform = nn.Linear(self.spatial_C, self.spatial_C)
             self.query_transform = nn.Linear(self.spatial_C, self.spatial_C)
@@ -201,7 +219,8 @@ class ConvolutionalSelfAttention(nn.Module):
                 if value_dim < 0: value_dim = self.spatial_C
                 self.value_transform = nn.Linear(self.spatial_C, value_dim)
                 self.cpg = nn.Linear(self.spatial_C, self.spatial_C * value_dim)
-        elif self.approach_name in {'gaussian_blur', 'box_filter'}: pass
+
+        elif self.approach_name in {'gaussian_blur', 'box_filter', 'gelu'}: pass
         else:
             raise ValueError('Invalid Approach type')
 
@@ -394,6 +413,36 @@ class ConvolutionalSelfAttention(nn.Module):
         return result[:, :, :self.spatial_C].reshape(
             -1, self.convs_height, self.convs_width, self.spatial_C
         )                                                                                                                # [B,Nc,C] -> [B,F,F,C]
+
+    def gelu(self, batch):
+        return F.gelu(batch)
+    
+    def approach3_v2_cigmoid(self, batch):
+        # local_mask = self.local_mask.flatten(1).transpose(1, 0)
+        valid_elements = (1 - self.padding_mask).reshape(-1).unsqueeze(0).unsqueeze(0)
+        X = self.maybe_add_positional_encodings(batch)                                                                  # [B,H,W,E]
+        batch_size, H, W, _ = X.shape
+        X = X.view(-1, H * W, X.shape[-1])                                                                              # [B,HW,E]
+        values = self.global_transform(X)                                                                               # [B,HW,C]
+
+        X_normed = F.normalize(X, dim=-1)                                                                               # [B,HW,C]
+        if self.approach_args["similarity_metric"] == 'cosine_similarity':
+            scores = torch.bmm(X_normed, X_normed.transpose(2, 1))                                                      # [B,HW,HW]
+        elif self.approach_args["similarity_metric"] == 'dot_product':
+            scores = torch.bmm(X, X.transpose(2, 1))                                                                    # [B,HW,HW]
+        attn = self.masked_softmax(                                                                                     # [B,HW,HW]
+            scores, 
+            mask=valid_elements,                                                                                        # Mask out padding indices [1, 1, HW]
+            dim=-1, epsilon=1e-5 
+        )                                                                                                               # [B,HW,HW]
+
+        filter_vecs = torch.bmm(attn, values)                                                                           # [B,HW,C]
+        # weighted_X = self.forget_gate_nonlinearity(filter_vals) * X                                                   # [B,HW,C] x [B,HW,1] -> [B,HW,C]
+        # output = torch.matmul(weighted_X.transpose(2, 1), local_mask).transpose(2, 1)                                 # [B,C,HW] x [HW,Nc] -> [B,C,Nc]
+        output = self.forget_gate_nonlinearity(filter_raw=filter_vecs, pooling_features=X)
+        return output.reshape(
+            batch_size, self.convs_height, self.convs_width, self.spatial_C
+        )
 
     def approach3_v2(self, batch):
         # local_mask = self.local_mask.flatten(1).transpose(1, 0)
@@ -840,7 +889,13 @@ class ConvolutionalSelfAttention(nn.Module):
 
     def pytorch_self_attention(self, batch):
         batch_pos = self.maybe_add_positional_encodings(batch).flatten(1, 2).transpose(1, 0)
-        in_proj_bias = torch.cat((self.query_transform._parameters['bias'], self.key_transform._parameters['bias'], self.value_transform._parameters['bias']))
+        in_proj_bias = torch.cat(
+            (
+                self.query_transform._parameters['bias'], 
+                self.key_transform._parameters['bias'], 
+                self.value_transform._parameters['bias']
+            )
+        )
         attn_output, attn_output_weights = F.multi_head_attention_forward(
                 batch_pos, batch_pos, batch_pos, self.spatial_C, 1, # q, k, v, dim, heads
                 None, in_proj_bias, # in_proj and in_proj bias
@@ -901,6 +956,37 @@ class ConvolutionalSelfAttention(nn.Module):
         cpg_matrix = cpg_matrix.reshape(B, H, W, -1, C)                                                                 # [B,HW,CD] -> [B,HW,D,C]
         output = torch.einsum('abcd,abcde->abce', sa_encodings, cpg_matrix)                                             # [B,HW,D] x [B,HW,D,C] -> [B,HW,C]
         return output
+    
+    def convolutional_self_attention(self, batch):
+        B, H, W, C = batch.shape
+        batch_summaries, _ = self.msa(
+            query=self.baseplate_params.unsqueeze(0).repeat(B, 1, 1, 1).flatten(1, 2), 
+            key=batch.flatten(1, 2), 
+            value=batch.flatten(1, 2),
+        )
+        batch_summaries =  batch_summaries.reshape(B, self.filter_K, self.filter_K, self.spatial_C)
+
+        batch_summaries = self.value_reducer(batch_summaries)
+
+        convolutional_weight = self.weight_proj(batch_summaries).\
+            reshape(B, self.filter_K, self.filter_K, self.spatial_C, self.spatial_C).\
+                permute(0, 4, 3, 1, 2)
+        convolutional_bias = self.bias_proj(batch_summaries).reshape(B, self.filter_K, self.filter_K, self.spatial_C).permute(
+            0, 3, 1, 2
+        ).mean(-1).mean(-1)
+        # Something like batchwise conv from pytorch with F
+        output_blah = F.conv2d(
+            input=batch.permute(0, 3, 1, 2).reshape(1, B * C, H, W),
+            weight=convolutional_weight.reshape(B * self.spatial_C, self.spatial_C, self.filter_K, self.filter_K),
+            bias=convolutional_bias.reshape(B * self.spatial_C),
+            groups=B,
+            stride=1,
+            padding='valid'
+        )
+        output = output_blah.reshape(B, self.spatial_C, self.convs_height, self.convs_width)
+        output = output.permute(0, 2, 3, 1)
+        return output
+
 
     def forward(self, batch):
         """
@@ -922,7 +1008,8 @@ class ConvAttnWrapper(nn.Module):
         # instantiate the backbone
         self.backbone = backbone
         # Obtain ordered list of backbone layers | Layer spatial information
-        self.backbone_layers, self.backbone_spatial_shapes = self.backbone.get_network_structure()
+        self.backbone_layers, self.backbone
+        _spatial_shapes = self.backbone.get_network_structure()
 
         self.network_structure = self.inject_variant()
 

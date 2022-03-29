@@ -8,6 +8,7 @@ import re
 import datetime
 import yaml
 import numpy
+import pdb
 
 import torch
 from torch.optim.lr_scheduler import _LRScheduler
@@ -18,7 +19,13 @@ from torch.utils.data import DataLoader
 import conf
 
 
-def name_model(config):
+def maybe_update_config(args, config, parameter, eval_fn=None):
+    args_value = getattr(args, parameter)
+    if args_value is not None:
+        config[parameter] = eval_fn(args_value) if eval_fn is not None else args_value
+
+
+def name_csam_model(config):
     formatted_injection_info = ''.join([str(tuple(info)) for info in config['injection_info']])
     formatted_injection_info = formatted_injection_info.replace(' ', '').replace('(', '[').replace(')', ']')
     model_name = 'CSAM_Approach{}_BN_PosEmb{}_AfterConv{}_Temp{}_StochStride{}_Stride{}_Residual{}_Forget{}_SimMetr{}_Seed{}'.format(
@@ -37,6 +44,31 @@ def name_model(config):
         model_name += '_k{}'.format(config['random_k'])
     return model_name
 
+def name_lwmsa_model(config):
+    formatted_injection_info = ''.join([str(tuple(info)) for info in config['injection_info']])
+    formatted_injection_info = formatted_injection_info.replace(' ', '').replace('(', '[').replace(')', ']')
+    model_name = 'LWMSA_PosEnc{}_nH{}_QKVBias{}_QKScale{}_AttnDrop{}_ProjDrop{}_Pad{}_Stride{}_Inj{}_Seed{}_LR{}_Warm{}'.format(
+        config['add_position_encoding'],
+        config['num_heads'],
+        config['qkv_bias'],
+        config['qk_scale'],
+        config['attn_drop'],
+        config['proj_drop'],
+        config['padding'],
+        config['stride'],
+        formatted_injection_info,
+        config['seed'],
+        config['lr'],
+        config['warm']
+    )
+    return model_name
+
+def name_model(config):
+    if config['approach_name'] == 'lwmsa':
+        return name_lwmsa_model(config)
+    else:
+        return name_csam_model(config)
+
 def read_yaml(path):
     return yaml.safe_load(
         open(
@@ -52,7 +84,7 @@ def save_yaml(path, data, verbose=True):
     with open(path, 'w') as outfile:
         yaml.dump(data, outfile, default_flow_style=False)
 
-def get_network(args):
+def get_network(args, separate_args):
     """ return given network
     """
 
@@ -95,6 +127,9 @@ def get_network(args):
     elif args.net == 'xception':
         from models.xception import xception
         net = xception()
+    elif args.net == 'csaresnet18':
+        from models.csa_resnet import resnet18
+        net = resnet18(instructions=separate_args)
     elif args.net == 'resnet18':
         from models.resnet import resnet18
         net = resnet18(
@@ -224,6 +259,7 @@ def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=Tru
         transforms.Normalize(mean, std)
     ])
     #cifar100_training = CIFAR100Train(path, transform=transform_train)
+    # pdb.set_trace()
     cifar100_training = torchvision.datasets.CIFAR100(
         root=os.environ.get('CIFAR_ROOT', 'data/cifar-100-python'), 
         train=True, download=True, transform=transform_train
@@ -278,7 +314,7 @@ class WarmUpLR(_LRScheduler):
     """warmup_training learning rate scheduler
     Args:
         optimizer: optimzier(e.g. SGD)
-        total_iters: totoal_iters of warmup phase
+        total_iters: total_iters of warmup phase
     """
     def __init__(self, optimizer, total_iters, last_epoch=-1):
 

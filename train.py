@@ -4,23 +4,24 @@ author baiyu
 """
 
 
+from multiprocessing.sharedctypes import Value
 import pdb
 from ast import parse, literal_eval
 import os
 import argparse
 import time
-import random 
+import random
+from tokenize import maybe 
 import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-from models.csam import ConvAttnWrapper
 from conf import settings
 from utils import get_network, get_training_dataloader, get_test_dataloader, WarmUpLR, \
     most_recent_folder, most_recent_weights, last_epoch, best_acc_weights, read_yaml, \
-    save_yaml, name_model
+    save_yaml, name_model, maybe_update_config
 
 def train(epoch):
 
@@ -34,6 +35,7 @@ def train(epoch):
 
         optimizer.zero_grad()
         outputs = model(images)
+        # import pdb; pdb.set_trace()
         loss = loss_function(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -142,6 +144,7 @@ if __name__ == '__main__':
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
+    parser.add_argument('--num_epochs', default=200, type=int)
 
     # Redundant with convattn.yaml
     parser.add_argument('--approach_name', help='name of the approach: "1", "2", "3", "4". Look at csam.py for full documentation about each of the methods.')
@@ -155,6 +158,14 @@ if __name__ == '__main__':
     parser.add_argument('--forget_gate_nonlinearity', help='Only used in approach 3. Nonlinearlity to apply for the "forget gate"')
     parser.add_argument('--similarity_metric', help='Only used in approach 3. Whether to use cosine similarity ("cosine_similarity") or dot product ("dot_product") to compute scores')
     parser.add_argument('--seed', default=17, type=int)
+    # Redundant with lwmsa.yaml
+    parser.add_argument('--num_heads', default=1)
+    parser.add_argument('--qkv_bias', default=True)
+    parser.add_argument('--qk_scale', default=1.0)
+    parser.add_argument('--attn_drop', default=0.)
+    parser.add_argument('--proj_drop', default=0.)
+    parser.add_argument('--padding', default='same')
+    parser.add_argument('--add_position_encoding', default=True)
 
     parser.add_argument(
         '-variant_config_path',
@@ -174,33 +185,63 @@ if __name__ == '__main__':
 
     variant_config = read_yaml(args.variant_config_path)
     print(variant_config)
-    net = get_network(args)
+    net = get_network(args, variant_config)
 
-    variant_config = read_yaml(args.variant_config_path)
+    if variant_config.get('variant_type', 'filter') == 'filter':
+        from models.csam import ConvAttnWrapper
+        maybe_update_config(args, variant_config, 'approach_name')
+        maybe_update_config(args, variant_config, 'suffix')
+        maybe_update_config(args, variant_config, 'pos_emb_dim', eval_fn=int)
+        maybe_update_config(args, variant_config, 'softmax_temp', eval_fn=float)
+        maybe_update_config(args, variant_config, 'injection_info', eval_fn=literal_eval)
+        maybe_update_config(args, variant_config, 'stride', eval_fn=int)
+        maybe_update_config(args, variant_config, 'apply_stochastic_stride')
+        maybe_update_config(args, variant_config, 'use_residual_connection')
+        maybe_update_config(args, variant_config, 'forget_gate_nonlinearity')
+        maybe_update_config(args, variant_config, 'similarity_metric')
+        maybe_update_config(args, variant_config, 'seed')
+        # if args.approach_name is not None:
+            # variant_config["approach_name"] = args.approach_name
+        # if args.suffix is not None:
+        #     variant_config["suffix"] = args.suffix
+        # if args.pos_emb_dim is not None:
+        #     variant_config["pos_emb_dim"] = int(args.pos_emb_dim)
+        # if args.softmax_temp is not None:
+        #     variant_config["softmax_temp"] = float(args.softmax_temp)
+        # if args.injection_info is not None:
+        #     variant_config["injection_info"] = literal_eval(args.injection_info)
+        # if args.stride is not None:
+        #     variant_config["stride"] = int(args.stride)
+        # if args.apply_stochastic_stride is not None:
+        #     variant_config["apply_stochastic_stride"] = args.apply_stochastic_stride
+        # if args.use_residual_connection is not None:
+        #     variant_config["use_residual_connection"] = args.use_residual_connection
+        # if args.forget_gate_nonlinearity is not None:
+        #     variant_config["forget_gate_nonlinearity"] = args.forget_gate_nonlinearity
+        # if args.similarity_metric is not None:
+        #     variant_config["similarity_metric"] = args.similarity_metric
+        # if args.seed is not None:
+        #     variant_config['seed'] = args.seed
+    elif variant_config.get('variant_type', 'lwmsa') == 'lwmsa':
+        from models.lwmsa import ConvAttnWrapper
+        maybe_update_config(args, variant_config, 'approach_name')
+        maybe_update_config(args, variant_config, 'suffix')
+        maybe_update_config(args, variant_config, 'num_heads', eval_fn=int)
+        maybe_update_config(args, variant_config, 'qkv_bias')
+        maybe_update_config(args, variant_config, 'qk_scale', eval_fn=float)
+        maybe_update_config(args, variant_config, 'attn_drop', eval_fn=float)
+        maybe_update_config(args, variant_config, 'proj_drop', eval_fn=float)
+        maybe_update_config(args, variant_config, 'padding', eval_fn=str)
+        maybe_update_config(args, variant_config, 'stride', eval_fn=int)
+        maybe_update_config(args, variant_config, 'injection_info', eval_fn=literal_eval)
+        maybe_update_config(args, variant_config, 'add_position_encoding')
+        maybe_update_config(args, variant_config, 'seed')
+        maybe_update_config(args, variant_config, 'lr', eval_fn=float)
+        maybe_update_config(args, variant_config, 'warm', eval_fn=float)
+    else:
+        raise ValueError('Unknown variant type') # Impossible to catch, added to keep vscode syntax highlighing happy
 
     # Overwrite all file configs with the ones set inline
-    if args.approach_name is not None:
-        variant_config["approach_name"] = args.approach_name
-    if args.suffix is not None:
-        variant_config["suffix"] = args.suffix
-    if args.pos_emb_dim is not None:
-        variant_config["pos_emb_dim"] = int(args.pos_emb_dim)
-    if args.softmax_temp is not None:
-        variant_config["softmax_temp"] = float(args.softmax_temp)
-    if args.injection_info is not None:
-        variant_config["injection_info"] = literal_eval(args.injection_info)
-    if args.stride is not None:
-        variant_config["stride"] = int(args.stride)
-    if args.apply_stochastic_stride is not None:
-        variant_config["apply_stochastic_stride"] = args.apply_stochastic_stride
-    if args.use_residual_connection is not None:
-        variant_config["use_residual_connection"] = args.use_residual_connection
-    if args.forget_gate_nonlinearity is not None:
-        variant_config["forget_gate_nonlinearity"] = args.forget_gate_nonlinearity
-    if args.similarity_metric is not None:
-        variant_config["similarity_metric"] = args.similarity_metric
-    if args.seed is not None:
-        variant_config['seed'] = args.seed
 
     model = ConvAttnWrapper(backbone=net, variant_kwargs=variant_config).to('cuda:0')
 
@@ -223,6 +264,7 @@ if __name__ == '__main__':
     )
 
     loss_function = nn.CrossEntropyLoss()
+    # pdb.set_trace()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
@@ -291,19 +333,19 @@ if __name__ == '__main__':
             model.load_state_dict(torch.load(weights_path))
             resume_epoch = last_epoch(checkpoint_dir)
 
-        for epoch in range(1, settings.EPOCH + 1):
+        for epoch in range(1, args.num_epochs + 1):
             if epoch > args.warm:
                 train_scheduler.step(epoch)
 
             if args.resume:
                 if epoch <= resume_epoch:
                     continue
-
+            # with torch.autograd.detect_anomaly():
             train(epoch)
             test_top1, test_top5 = eval_training(epoch)
 
             #start to save best performance model after learning rate decay to 0.01
-            if epoch > settings.MILESTONES[1] and best_top1 < test_top1:
+            if best_top1 < test_top1:
                 weights_path = checkpoint_path.format(net=args.net, epoch=epoch, type='best')
                 with open('logs/latest_successful_checkpoint_paths.txt', 'a') as f:
                     f.write(weights_path)

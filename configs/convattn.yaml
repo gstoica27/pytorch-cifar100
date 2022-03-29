@@ -1,8 +1,8 @@
-approach_name: '3_unmasked'
-pos_emb_dim: 0
+approach_name: 'convolutional_self_attention'
+pos_emb_dim: -1
 softmax_temp: 1
 injection_info: [   # list of lists
-  [3, 1, 3] # [InjectionLayer,NumStack,FilterSize]
+  # [1, 1, 3] # [InjectionLayer,NumStack,FilterSize]
 ]
 padding: same
 stride: 1
@@ -11,3 +11,10 @@ use_residual_connection: False
 random_k: -1
 forget_gate_nonlinearity: 'sigmoid'
 similarity_metric: 'cosine_similarity'
+vdim: 9
+num_heads: 1
+add_residual: False
+add_kv_bias: True
+dropout: 0.
+value_dim: 5
+add_position_encoding: True
